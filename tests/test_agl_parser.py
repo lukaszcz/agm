@@ -1708,6 +1708,48 @@ class TestAttributes:
         assert attribute_names(en) == ["doc"]
         assert [attribute_names(member) for member in en.members] == [["doc"], []]
 
+    @pytest.mark.parametrize(
+        "prefix",
+        (
+            '  | @doc("m")\n    ',
+            '  | @doc("""\n      m\n    """)\n    ',
+            '  | @doc("m")\n    @json-name("named")\n    ',
+            '  | @doc("m") @arg-named\n    ',
+        ),
+    )
+    @pytest.mark.parametrize("payload", ("", "(value: int)", "\n      value: int"))
+    def test_enum_member_attributes_can_precede_the_constructor_line(
+        self, prefix: str, payload: str
+    ) -> None:
+        en = first(parse(f"enum E\n{prefix}Member{payload}\n  | Other\n"))
+        assert isinstance(en, EnumDef)
+        member, other = en.members
+        assert member.name == "Member"
+        assert other.name == "Other"
+        expected = ["doc"]
+        if "@json-name" in prefix:
+            expected.append("json-name")
+        if "@arg-named" in prefix:
+            expected.append("arg-named")
+        assert attribute_names(member) == expected
+        assert [field.name for field in member.fields] == (["value"] if payload else [])
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            'enum E | @doc("m")\n  Member\n| Other',
+            'enum E =\n  @doc("m")\n    Member\n  | Other',
+            'scope S\n  enum E\n    | @doc("m")\n      Member\n    | Other\nend S',
+        ),
+    )
+    def test_enum_member_doc_lines_in_other_layouts(self, source: str) -> None:
+        en = first(parse(source))
+        if isinstance(en, ScopeRegion):
+            en = en.items[0]
+        assert isinstance(en, EnumDef)
+        assert [member.name for member in en.members] == ["Member", "Other"]
+        assert [attribute_names(member) for member in en.members] == [["doc"], []]
+
     def test_exception_declaration_and_field_attributes(self) -> None:
         exc = first(parse('@doc("x")\nexception E(@doc("c") code: int)'))
         assert isinstance(exc, ExceptionDef)

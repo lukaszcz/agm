@@ -20,7 +20,9 @@ alias, any `def` form (`program`, `builtin`, and `extern` included), a
 
 Several attributes may be written in a row, on the line above the declaration
 or in front of it on the same line. An enum member's attributes follow its
-`|`. Token-level rules: [Lexical structure](lexical-structure.md#attributes).
+`|`; the constructor and further attributes may continue on indented lines
+below the prefix. Constructor fields are indented further below the constructor.
+Token-level rules: [Lexical structure](lexical-structure.md#attributes).
 
 ```agl
 @doc("Formats one entry.")
@@ -32,7 +34,13 @@ record Entry
   @arg-named count: int
 
 enum Shape
-  | @doc("a rectangle") @arg-pos Rect(width: int, height: int)
+  | @doc("""
+      A rectangle with horizontal and vertical extents.
+    """)
+    @arg-pos
+    Rect
+      width: int
+      height: int
   | Empty
 ```
 

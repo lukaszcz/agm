@@ -791,7 +791,7 @@ class AstBuilder(Transformer):
         return tuple(a for a in args if isinstance(a, (syntax.VariantDef, syntax.VariantRef)))
 
     def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
-        # Grammar: PIPE? attributes? name variant_payload?
+        # The hidden member continuation flattens attributes, name, and payload.
         name_tok = next(a for a in args if _is_name_token(a))
         fields: tuple[syntax.Param, ...] = ()
         for a in args:
@@ -3177,10 +3177,12 @@ def _find_constraints(args: _Args) -> tuple[syntax.Constraint, ...]:
 
 
 def _find_attributes(args: _Args) -> tuple[syntax.Attribute, ...]:
-    """Return the attribute prefix among a rule's children, or none."""
-    return next(
-        (cast(tuple[syntax.Attribute, ...], a) for a in args if _is_attribute_tuple(a)),
-        (),
+    """Join attribute prefixes among a rule's children in source order."""
+    return tuple(
+        attribute
+        for arg in args
+        if _is_attribute_tuple(arg)
+        for attribute in cast(tuple[syntax.Attribute, ...], arg)
     )
 
 

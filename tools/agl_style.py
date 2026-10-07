@@ -513,7 +513,12 @@ def _member_field_lists(tokens: Sequence[Token], keyword: int) -> list[FieldList
         if tokens[index].type == "PIPE":
             index += 1
         anchor = index
-        index = _after_name(tokens, _after_attributes(tokens, index))
+        index = _after_attributes(tokens, index)
+        continuation_depth = 0
+        while index < len(tokens) and tokens[index].type == "_INDENT":
+            continuation_depth += 1
+            index = _after_attributes(tokens, index + 1)
+        index = _after_name(tokens, index)
         payload = tokens[index].type if index < len(tokens) else ""
         if payload == "_INDENT":
             block = True
@@ -539,7 +544,7 @@ def _member_field_lists(tokens: Sequence[Token], keyword: int) -> list[FieldList
                     )
                 )
         # On to the next member's `|`, past this one's field block or type arguments.
-        depth = 0
+        depth = continuation_depth
         while index < len(tokens) and (
             depth or tokens[index].type not in _ITEM_END_TYPES | {"PIPE"}
         ):

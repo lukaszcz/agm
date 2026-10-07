@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "multiline_member_docs_preserve_payloads_tags_and_schema",
+      "agents": {"reader": ["{\"$case\": \"ready\", \"value\": 5, \"note\": \"checked\"}"]},
+      "expect": {
+        "stdout": "ready 5 checked\nfine\ntrue\ntrue\n",
+        "calls": {"reader": 1},
+        "prompts": [
+          {
+            "agent": "reader",
+            "call": 0,
+            "schema_contains": [
+              "An answer whose payload is ready for use.\n\nThe note describes the payload.",
+              "The answer's payload.",
+              "An answer that is not ready yet.",
+              "ready"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "fieldless_member_after_documented_payload_member_decodes",
+      "agents": {"reader": ["{\"$case\": \"Waiting\"}"]},
+      "expect": {
+        "stdout": "waiting\nfine\ntrue\ntrue\n",
+        "calls": {"reader": 1}
+      }
+    }
+  ]
+}

@@ -549,7 +549,9 @@ same spelling is an ordinary identifier everywhere else.
 An attribute prefixes what it belongs to, and several attributes may be written
 in a row. A declaration, a field, and a parameter each take their attributes on
 the line above or in front of them on the same line. An enum member takes its
-attributes after the member's `|`, on the member's own line.
+attributes after the member's `|`; the constructor and further attributes may
+continue on indented lines below the prefix, with fields indented further below
+the constructor.
 
 ```agl
 @arg-pos

@@ -218,10 +218,9 @@ field_def: attributes? VAR? field_name COLON type_expr (EQ or_expr)?
 ?field_name: NAME
 ?name: NAME | OP_NAME
 
-// enum_def: flat variant list using the |-continuation layout rule.
-// The |-continuation layout rule suppresses the _NEWLINE before each | and
-// never indents for one, so the variant list is a flat token sequence broken
-// only by a member's own indented field block.
+// enum_def: a variant list using the |-continuation layout rule.
+// Layout suppresses the _NEWLINE before each | without pushing indentation.
+// Members may open attribute continuations and field blocks.
 enum_def: attributes? _enum_def_tail
 
 _enum_def_tail: "enum" decl_head type_params? EQ? enum_body
@@ -231,12 +230,17 @@ enum_body: enum_variant_seq
 
 enum_variant_seq: first_variant_def variant_tail*
 
-first_variant_def: PIPE? attributes? name variant_payload?    -> variant_def
+first_variant_def: PIPE? _variant_definition                 -> variant_def
                  | PIPE? qual_ref_chain member_type_args?     -> variant_ref
                  | PIPE? qual_ref_chain variant_payload       -> variant_ref_with_payload
-variant_tail: PIPE attributes? name variant_payload?           -> variant_def
+variant_tail: PIPE _variant_definition                       -> variant_def
             | PIPE qual_ref_chain member_type_args?           -> variant_ref
             | PIPE qual_ref_chain variant_payload             -> variant_ref_with_payload
+
+// An attributed member may continue on indented lines below its |. The
+// continuation contains the remaining attributes, name, and optional fields.
+_variant_definition: attributes? name variant_payload?
+                   | attributes _INDENT _variant_definition _NEWLINE? _DEDENT
 
 member_type_args: type_lsqb type_arg_list RSQB
 

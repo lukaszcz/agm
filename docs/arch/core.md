@@ -30,7 +30,7 @@ Commands that support `--dry-run` set an invocation mode consulted by the proces
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads; and the pinned AgL decimal context with exact number parsing, conversion, and int/decimal comparison.
+`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by agent command arguments and config paths; a `ContextVar` scoping guard; an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads; and the pinned AgL decimal context with exact number parsing, conversion, and int/decimal comparison.
 
 ## Code Entry Points
 

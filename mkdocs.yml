@@ -58,8 +58,6 @@ nav:
   - Command reference:
       - Overview: commands/index.md
       - Workspace and project lifecycle: commands/workspaces.md
-      - Agent workflows: commands/agents.md
-      - Loop automation: commands/loop.md
       - AgL workflow DSL: commands/agl.md
       - Packages: commands/pkg.md
       - Configuration: commands/config.md
@@ -77,7 +75,7 @@ nav:
           - Packages: arch/packages.md
           - Package store and installation: arch/package-store.md
           - Sandboxed execution: arch/sandbox.md
-          - Agent workflows: arch/agents.md
+          - AgL agent runtime: arch/agents.md
           - Testing: arch/testing.md
       - AgL:
           - Overview: arch/agl/index.md

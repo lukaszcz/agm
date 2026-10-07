@@ -16,7 +16,7 @@ from typer.core import TyperCommand, TyperOption
 
 import agm.vcs.git as git_helpers
 from agm.config.context import current_config_context
-from agm.config.general import load_merged_config, load_run_config
+from agm.config.general import load_run_config
 from agm.project.dependency_checkout import main_dep_repo
 
 if TYPE_CHECKING:
@@ -92,18 +92,13 @@ _HELP_TREE: dict[tuple[str, ...], list[str]] = {
         "worktree",
         "dep",
         "pkg",
-        "review",
-        "revise",
-        "refine",
         "exec",
         "repl",
         "check",
         "run",
-        "loop",
         "tmux",
         "help",
     ],
-    ("loop",): ["select", "run", "step"],
     ("config",): ["cp", "copy", "env", "update"],
     ("workspace",): ["open", "close", "setup", "list"],
     ("wsp",): ["open", "close", "setup", "list"],
@@ -564,16 +559,6 @@ def complete_package_source(ctx: click.Context, args: list[str], incomplete: str
     ]
 
 
-def _configured_command_names(
-    section: str, *, home: Path, proj_dir: Path | None, cwd: Path
-) -> set[str]:
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = merged.get(section)
-    if not isinstance(table, dict):
-        return set()
-    return {key for key, value in table.items() if isinstance(key, str) and isinstance(value, dict)}
-
-
 @_completes_quietly
 def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     """Complete ``.agl`` file paths for the ``agm exec FILE`` argument."""
@@ -849,26 +834,3 @@ class ExecCommand(TyperCommand):
         # A failure past the shared discovery (option-map projection, item
         # building) degrades to the built-in exec options.
         return _advisory(complete, base)
-
-
-@_completes_quietly
-def complete_revise_command_or_review_file(
-    ctx: click.Context, args: list[str], incomplete: str
-) -> list[str]:
-    del ctx, args
-    try:
-        context = current_config_context()
-        command_matches = _match(
-            _configured_command_names(
-                "revise",
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-            ),
-            incomplete,
-        )
-    except (OSError, SystemExit):
-        command_matches = []
-    if command_matches:
-        return command_matches
-    return _path_candidates(incomplete)

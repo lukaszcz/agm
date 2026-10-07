@@ -1,4 +1,4 @@
-"""Shared command output logging helpers."""
+"""Shared trace logging helpers."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 
 from agm.core.fs import append_text, mkdir, write_text
-from agm.core.path import display_path
 from agm.vcs import git as git_helpers
 
 AGENT_FILES_DIRNAME = ".agent-files"
@@ -88,7 +87,6 @@ class LiveTracePathResolver:
             path = _log_file_path(
                 command_name=self._command_name,
                 log_file=trace_file,
-                unique=True,
                 extension=".jsonl",
             )
             if trace_file is None:
@@ -97,37 +95,7 @@ class LiveTracePathResolver:
         return path
 
 
-def resolve_log_file(
-    *,
-    command_name: str,
-    enabled: bool,
-    log_file: str | None,
-    unique: bool = False,
-) -> Path | None:
-    """Resolve the trace log file path from an already-resolved decision.
-
-    When *enabled* is ``False`` returns ``None`` (no trace).  When *log_file*
-    is provided, it is used as the explicit path (resolved to absolute if
-    relative).  Otherwise an auto timestamped filename is generated under
-    ``.agent-files/``.
-
-    When *unique* is ``True``, a pid-based component is appended to the
-    default (timestamp-based) filename so that two concurrent invocations in
-    the same second produce different paths instead of colliding.
-    *unique* has no effect when *log_file* is provided explicitly.
-    loop/review behavior is unchanged unless they opt in (``unique=False``,
-    the default).
-    """
-    if not enabled:
-        return None
-    return _log_file_path(
-        command_name=command_name, log_file=log_file, unique=unique, extension=".log"
-    )
-
-
-def _log_file_path(
-    *, command_name: str, log_file: str | None, unique: bool, extension: str
-) -> Path:
+def _log_file_path(*, command_name: str, log_file: str | None, extension: str) -> Path:
     """Resolve the trace path for enabled logging — the always-a-path core."""
     if log_file is not None:
         resolved = Path(log_file)
@@ -135,10 +103,8 @@ def _log_file_path(
             resolved = Path.cwd() / resolved
         return resolved
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if unique:
-        pid = os.getpid()
-        return default_agent_files_dir() / f"{command_name}-{timestamp}-{pid}{extension}"
-    return default_agent_files_dir() / f"{command_name}-{timestamp}{extension}"
+    pid = os.getpid()
+    return default_agent_files_dir() / f"{command_name}-{timestamp}-{pid}{extension}"
 
 
 def prepare_trace_log(
@@ -149,10 +115,9 @@ def prepare_trace_log(
 ) -> Path | None:
     """Resolve and validate the JSONL trace path up front, or return ``None``.
 
-    Resolves via :func:`resolve_log_file` (``unique=True`` to avoid collisions
-    on the second-granularity stamp), then creates the parent directory and
-    truncates the file to empty to confirm writability and ensure each run
-    starts from a clean file.  An unwritable path exits 1 with a clean
+    Resolves a collision-resistant path, then creates the parent directory
+    and truncates the file to empty to confirm writability and ensure each run
+    starts from a clean file. An unwritable path exits 1 with a clean
     ``Error: ...`` BEFORE any program runs instead of crashing mid-run.
     Returns ``None`` when *enabled* is ``False``; callers that suppress tracing
     for other reasons (e.g. check-only execution) short-circuit before calling.
@@ -163,7 +128,6 @@ def prepare_trace_log(
     log_path = _log_file_path(
         command_name=command_name,
         log_file=trace_file,
-        unique=True,
         extension=".jsonl",
     )
     try:
@@ -173,21 +137,6 @@ def prepare_trace_log(
         print(f"Error: cannot write trace log to {log_path}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     return log_path
-
-
-def append_log(log_file: Path | None, content: str) -> None:
-    if log_file is None or not content:
-        return
-    append_text(log_file, content, encoding="utf-8")
-
-
-def prepare_log_file(
-    log_file: Path | None,
-) -> None:
-    if log_file is None:
-        return
-    print(f"Logging to {display_path(log_file)}")
-    mkdir(log_file.parent, parents=True, exist_ok=True)
 
 
 def append_jsonl(path: Path | None, record: Mapping[str, object]) -> None:

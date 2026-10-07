@@ -337,7 +337,7 @@ def _manifest_engine_table(
     }
     if not raw:
         return raw
-    return resolve_section_paths(raw, PATH_ENGINE_KEYS, cwd, cwd, sentinels={})
+    return resolve_section_paths(raw, PATH_ENGINE_KEYS, cwd, cwd)
 
 
 def _registered_command_mismatch(command_path: str) -> NoReturn:

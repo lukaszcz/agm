@@ -1,10 +1,10 @@
-# Agent Workflows
+# AgL Agent Runtime
 
-AGM runs real coding agents (claude, codex, pi, and custom runner commands) as subprocesses to drive task loops and code-review workflows. The agent layer owns how a runner is invoked, how prompts are prepared, how output is captured under timeouts, how conversations continue across calls, and how completion is detected. AgL orchestrates agents from inside typed programs through this same layer ([agl/index.md](agl/index.md)).
+AgL runs native agents and custom commands through a shared subprocess and session layer. The agent layer owns command construction, prompt delivery, sandbox preparation, output capture, and conversation lifecycles. AgL orchestrates agents from typed programs through this layer ([agl/index.md](agl/index.md)).
 
 ## Agent Specs and the Runner
 
-An agent is described by an immutable host *spec* (`agent/spec.py`): one per supported kind, each building its own argv, plus a verbatim custom command. The catalog of specs is what AgL's `Agent` enum decodes into. The runner attaches the prompt the way the spec declares — an interpolated placeholder, an appended `@<path>` argument, or stdin — runs the command with output capture, and enforces an *idle timeout*: a process that produces no output for the configured duration is terminated and that invocation fails, leaving control with the caller. Results carry return code, elapsed time, timeout or spawn-error status, and the captured streams still undecoded, so each is decoded strictly only where its text is needed: output that is not valid UTF-8 is a transport protocol failure, never replacement characters in a reply. Prompt text and runner arguments interpolate `%{name}` holes from the environment and workflow context under one shared rule set (`util/interp.py`).
+An agent is described by an immutable host *spec* (`agent/spec.py`): one per supported kind, each building its own argv, plus a verbatim custom command. The catalog of specs is what AgL's `Agent` enum decodes into. The runner attaches rendered prompts through an interpolated placeholder, an appended `@<path>` argument, or stdin, runs the command with output capture, and enforces an *idle timeout*. Results carry return code, elapsed time, timeout or spawn-error status, and the captured streams still undecoded, so each is decoded strictly only where its text is needed. Runner arguments interpolate `%{name}` holes from the child environment and prompt/session bindings under one shared rule set (`util/interp.py`).
 
 Each spec's `argv`/`session_argv`/`rpc_argv` takes a `PermissionMode` (`NATIVE`, `UNRESTRICTED`, `NONE`; default `NONE`) and appends its own flag for that mode after its other options — `claude`/`codex` each own a table mapping mode to flag (`NONE` carries no flag), `pi` and a verbatim `AgentCommand` add nothing regardless of mode; each spec owns its table, so no other module does flag string surgery. `codex` keeps a second table for its resume form, which re-asserts no approval policy: a resumed thread inherits the one recorded when its session was created. The runner owns sandbox preparation and teardown for an agent run, given a `SandboxRun` (`sandbox.md`); a preparation failure is an ordinary spawn failure, not a new failure kind. `AgentCallInfo` records whether a call was sandboxed and under which permission mode. `agm check` stops before agent dispatch.
 
@@ -26,23 +26,9 @@ Every native member field defaults to `""`. `agent/spec_defaults.py:with_configu
 
 `SessionService` (`agent/session/service.py`) gives every caller one backend-neutral lifecycle for continuing conversations: it owns opaque handles and their backend instances, snapshots agent and transport selection when a session opens, and releases every owned process at the command or interpreter boundary. A session's permission mode, `SandboxLimits`, and process environment are fixed once, at open, and carried to every backend process for that session's whole lifetime, including native lifecycle calls (compact, fork) and every `ask` it sends — there is no per-ask override (`SessionAskRequest` carries only the prompt). A one-shot `ask`/`Agent::ask` opens its own ephemeral session for that single call, so its mode and environment are whatever `default-sandbox`/`env =` (or their explicit call-site operands) decode to at that call's own open. Two backend families implement the protocol: CLI adapters that translate the lifecycle into each agent CLI's create/continue/compact/fork flags, deferring native transcript creation to the first prompt and preparing a fresh sandboxed command for each prompt under the session's fixed mode and environment; and a persistent Pi RPC backend that owns one streaming JSONL child process, preparing its sandboxed command once when that child spawns and closing the preparation when it terminates. A handle's `continues_conversation` (surfaced on the AgL session snapshot) says whether a later prompt continues the conversation: always for the native CLI adapters and Pi RPC; for the command adapter, decided at open by whether its command targets `%{SESSION_ID}` — only an ephemeral (explicit-agent ask) command session may lack it. The evaluator composes a short corrective follow-up only on continuing handles, else the complete one-shot prompt. Which transport an agent uses by default is a property of its spec. AgL reaches the service through `agl/runtime/sessions.py`.
 
-## Runner Resolution
-
-Loop, review, and revise resolve their runner from explicit CLI arguments, then a per-command sub-table layered over their own base section (`[loop]`, `[review]`, `[revise]`), then a shared built-in floor. Each command reads only its own section.
-
-## Loop
-
-The `loop` group drives iterative agent work over a set of tasks: a *selector* chooses the next task and a *runner* works it. `loop run` drives the full cycle, `loop step` one iteration, `loop select` selection only. A timed-out call is retried or leaves its iteration incomplete rather than terminating the loop; when enabled, the loop log receives step output and every diagnostic.
-
-## Review, Revise, Refine
-
-**review** runs a review prompt and writes the result to a file; **revise** applies an existing review file; **refine** alternates the two until the work is complete or a step limit is reached. They share prompt preprocessing that merges scope, aspects, and context into the prompt, and the runner resolution above.
-
 ## Code Entry Points
 
-- `src/agm/agent/spec.py` — host agent specs and the spec catalog; `values.py` — host Agent shorthand; `spec_defaults.py` — configured default provider, model, and effort; `defaults.py` — the built-in runner floor.
-- `src/agm/agent/runner.py` — runner parsing, prompt attachment, subprocess execution with idle timeout, run results.
+- `src/agm/agent/spec.py` — host agent specs and the spec catalog; `values.py` — host Agent shorthand; `spec_defaults.py` — configured default provider, model, and effort.
+- `src/agm/agent/runner.py` — rendered prompt delivery, sandboxed subprocess execution, and structured run results.
 - `src/agm/agent/session/` — the session protocol, service, CLI adapters, and the Pi RPC backend.
-- `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, output formatting.
-- `src/agm/agent/loop.py`, `src/agm/agent/review/` — loop settings and the review/revise workflow implementations.
-- `src/agm/commands/loop/`, `review.py`, `revise.py`, `refine.py` — the driving commands.
+- `src/agm/agl/runtime/agents.py`, `host_agents.py`, and `sessions.py` — the AgL host services that resolve agents and dispatch calls.

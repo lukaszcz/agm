@@ -10,7 +10,7 @@ The context locates the directories that contribute configuration. The project d
 
 ## AGM Home and the Standard Library
 
-One AGM home holds config, prompts, sandbox settings, the AgL global library, and the package store: `AGM_HOME` when set, otherwise a populated `<install-prefix>/.agm` beside the executable, otherwise `~/.agm`. Setup copies the config templates from the repository's `config/` into the AGM home.
+One AGM home holds config, sandbox settings, the AgL global library, and the package store: `AGM_HOME` when set, otherwise a populated `<install-prefix>/.agm` beside the executable, otherwise `~/.agm`. Setup copies the config templates from the repository's `config/` into the AGM home.
 
 The AgL standard library resolves from `AGM_STDLIB` (an unchecked escape hatch), then a development `std` checkout whose module tree holds the invocation's anchor (the entry file, or the working directory) so the library is checked and run from the tree being edited, then the active managed `std` store package, which must exactly match the running AGM version, then the shipped fallback tree that `stdlib_locator.py` finds at the repository root in a checkout or bundled inside the wheel. See [package-store.md](package-store.md) for the managed package.
 
@@ -20,7 +20,7 @@ General configuration merges from least to most specific: the install prefix's `
 
 ## Sections
 
-Sections are consumed by specific features — `[loop]`, `[review]`, `[revise]`, `[run]`, `[exec]`, `[agent]`, `[modules]`, `[packages]`. `[agent]` holds default Pi provider, model, and effort keyed by CLI, then provider/model, validated strictly at AgL host startup ([agents.md](agents.md)). Per-command override sub-tables such as `[review.<name>]` merge over their base section. `[packages]` pins exact package versions and overrides global activation for that invocation. The `agm config` command group copies project config files into a workspace, prints the workspace environment as shell statements, and creates missing `config.toml` files.
+Sections are consumed by specific features — `[run]`, `[exec]`, `[agent]`, `[modules]`, `[packages]`. `[agent]` holds default Pi provider, model, and effort keyed by CLI, then provider/model, validated strictly at AgL host startup ([agents.md](agents.md)). `[packages]` pins exact package versions and overrides global activation for that invocation. The `agm config` command group copies project config files into a workspace, prints the workspace environment as shell statements, and creates missing `config.toml` files.
 
 ## AgL Settings
 
@@ -46,7 +46,6 @@ Sandbox settings follow their own discovery and merge chain across the same scop
 - `src/agm/config/context.py` — config context and project-directory discovery.
 - `src/agm/config/home.py` — AGM home directory resolution (`AGM_HOME`, installation prefix, project-relative default) and AGM-home path candidates; a leaf module so `agm.project.layout` can depend on it.
 - `src/agm/config/general.py` — layer loading, merging, precedence retention, and per-feature readers.
-- `src/agm/config/command_config.py` — per-command override sections.
 - `src/agm/config/engine_keys.py` — the engine-key catalog; `src/agm/config/qualified_keys.py` — qualified AgL config-key routing; `src/agm/cli_support/param_config.py` — module-parameter and selected-program-route resolution.
 - `src/agm/config/module_roots.py` — AgL module roots from `[modules]` and the `AGM_STDLIB` override; `src/agm/stdlib_locator.py` — the shipped stdlib tree.
 - `src/agm/config/sandbox/` — SRT sandbox settings discovery and merging.

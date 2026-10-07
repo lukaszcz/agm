@@ -648,10 +648,6 @@ def test_complete_close_branch_suggests_branch_workspace_names(
 
 def test_complete_help_path_suggests_subcommands() -> None:
     assert completion.complete_help_path(_make_ctx(help_command=["wt"]), "n") == ["new"]
-    assert completion.complete_help_path(_make_ctx(help_command=["loop"]), "s") == [
-        "select",
-        "step",
-    ]
     assert completion.complete_help_path(_make_ctx(help_command=["config"]), "e") == ["env"]
     assert completion.complete_help_path(_make_ctx(help_command=["pkg"]), "") == [
         "check",
@@ -668,13 +664,7 @@ def test_complete_help_path_suggests_subcommands() -> None:
     assert completion.complete_help_path(_make_ctx(), "s") == ["sync"]
     assert completion.complete_help_path(_make_ctx(), "p") == ["pkg"]
     assert completion.complete_help_path(_make_ctx(), "e") == ["exec"]
-    assert completion.complete_help_path(_make_ctx(), "r") == [
-        "refine",
-        "repl",
-        "review",
-        "revise",
-        "run",
-    ]
+    assert completion.complete_help_path(_make_ctx(), "r") == ["repl", "run"]
 
 
 def test_nested_registered_help_does_not_leak_builtin_children(
@@ -1536,131 +1526,6 @@ class TestCompletePathArgument:
         ctx = click.Context(click.Command("test"))
         result = completion.complete_path_argument(ctx, [], "x")
         assert result == []
-
-
-class TestCompleteReviseCommandOrReviewFile:
-    def test_configured_command_names_ignores_missing_section(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(completion, "load_merged_config", lambda **kwargs: {})
-
-        result = completion._configured_command_names(
-            "revise",
-            home=tmp_path / "home",
-            proj_dir=None,
-            cwd=tmp_path,
-        )
-
-        assert result == set()
-
-    def test_prefers_config_command_names(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        work = tmp_path / "work"
-        work.mkdir()
-        monkeypatch.chdir(work)
-        monkeypatch.setattr(
-            "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: None
-        )
-        monkeypatch.setattr(
-            completion,
-            "load_merged_config",
-            lambda **kwargs: {
-                "revise": {
-                    "runner": "codex exec",
-                    "frontend": {"prompt": "fix ui"},
-                    "backend": {"prompt": "fix api"},
-                }
-            },
-        )
-        ctx = click.Context(click.Command("test"))
-
-        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
-
-        assert result == ["frontend"]
-
-    def test_falls_back_to_paths_when_no_command_matches(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        work = tmp_path / "work"
-        work.mkdir()
-        (work / "review.md").write_text("review\n", encoding="utf-8")
-        monkeypatch.chdir(work)
-        monkeypatch.setattr(
-            "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: None
-        )
-        monkeypatch.setattr(
-            completion,
-            "load_merged_config",
-            lambda **kwargs: {"revise": {"frontend": {"prompt": "fix ui"}}},
-        )
-        ctx = click.Context(click.Command("test"))
-
-        result = completion.complete_revise_command_or_review_file(ctx, [], "rev")
-
-        assert result == ["review.md"]
-
-    def test_handles_project_lookup_errors(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        home = tmp_path / "home"
-        home.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            completion,
-            "discover_current_project_dir",
-            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
-        )
-        monkeypatch.setattr(
-            completion,
-            "load_merged_config",
-            lambda **kwargs: {"revise": {"frontend": {"prompt": "fix ui"}}},
-        )
-        ctx = click.Context(click.Command("test"))
-
-        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
-
-        assert result == ["frontend"]
-
-    @pytest.mark.usefixtures("self_validation_disabled")
-    def test_returns_empty_on_config_errors(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            completion,
-            "load_merged_config",
-            lambda **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
-        )
-        ctx = click.Context(click.Command("test"))
-
-        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
-
-        assert result == []
-
-    def test_falls_back_to_review_files_when_config_context_exits(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        review_file = tmp_path / "frontend-review.md"
-        review_file.write_text("review\n", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            completion,
-            "current_config_context",
-            lambda: (_ for _ in ()).throw(SystemExit(1)),
-        )
-        ctx = click.Context(click.Command("test"))
-
-        result = completion.complete_revise_command_or_review_file(ctx, [], "front")
-
-        assert result == ["frontend-review.md"]
 
 
 class TestBranchCandidatesExceptionHandling:

@@ -1,10 +1,9 @@
-"""Tests for the idle-timeout watchdog in agm loop and process helpers."""
+"""Tests for the idle-timeout watchdog in process helpers."""
 
 from __future__ import annotations
 
 import sys
 import time
-from pathlib import Path
 
 import pytest
 
@@ -154,125 +153,3 @@ class TestIdleTimeout:
 
 
 # ---------------------------------------------------------------------------
-# loop CLI arg parsing --timeout
-# ---------------------------------------------------------------------------
-
-
-class TestLoopTimeoutArg:
-    def test_parse_loop_args_timeout_seconds(self) -> None:
-        from agm.cli import _parse_loop_args
-
-        args = _parse_loop_args(
-            ["--timeout", "30", "--no-selector", "mycmd"],
-            command_path=["loop"],
-        )
-        assert args.timeout == 30.0
-
-    def test_parse_loop_args_timeout_minutes(self) -> None:
-        from agm.cli import _parse_loop_args
-
-        args = _parse_loop_args(
-            ["--timeout", "30m", "--no-selector", "mycmd"],
-            command_path=["loop"],
-        )
-        assert args.timeout == 1800.0
-
-    def test_parse_loop_args_timeout_hours(self) -> None:
-        from agm.cli import _parse_loop_args
-
-        args = _parse_loop_args(
-            ["--timeout", "2h", "--no-selector", "mycmd"],
-            command_path=["loop"],
-        )
-        assert args.timeout == 7200.0
-
-    def test_parse_loop_args_timeout_invalid_reports_error(self) -> None:
-        from agm.cli import _parse_loop_args
-
-        with pytest.raises(SystemExit):
-            _parse_loop_args(
-                ["--timeout", "abc", "--no-selector", "mycmd"],
-                command_path=["loop"],
-            )
-
-    def test_parse_loop_select_args_timeout(self) -> None:
-        from agm.cli import _parse_loop_select_args
-
-        args = _parse_loop_select_args(
-            ["--timeout", "10m", "mycmd"],
-            command_path=["loop", "select"],
-        )
-        assert args.timeout == 600.0
-
-    def test_timeout_defaults_to_none(self) -> None:
-        from agm.cli import _parse_loop_args
-
-        args = _parse_loop_args(
-            ["--no-selector", "mycmd"],
-            command_path=["loop"],
-        )
-        assert args.timeout is None
-
-
-# ---------------------------------------------------------------------------
-# config.toml [loop] timeout
-# ---------------------------------------------------------------------------
-
-
-class TestLoopTimeoutConfig:
-    def test_load_loop_config_reads_numeric_timeout(self, tmp_path: Path) -> None:
-        from agm.config.general import load_loop_config
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[loop]\ntimeout = 1800\n")
-
-        config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
-        assert config.timeout == 1800.0
-
-    def test_load_loop_config_reads_string_timeout(self, tmp_path: Path) -> None:
-        from agm.config.general import load_loop_config
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\ntimeout = "30m"\n')
-
-        config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
-        assert config.timeout == 1800.0
-
-    def test_load_loop_config_timeout_defaults_to_none(self, tmp_path: Path) -> None:
-        from agm.config.general import load_loop_config
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude -p"\n')
-
-        config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
-        assert config.timeout is None
-
-    def test_load_loop_config_zero_timeout_is_none(self, tmp_path: Path) -> None:
-        from agm.config.general import load_loop_config
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[loop]\ntimeout = 0\n")
-
-        config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
-        assert config.timeout is None
-
-    def test_command_specific_timeout_overrides_default(self, tmp_path: Path) -> None:
-        from agm.config.general import load_loop_config
-
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[loop]\ntimeout = "30m"\n[loop.codex]\ntimeout = "1h"\n'
-        )
-
-        config = load_loop_config(
-            home=home,
-            proj_dir=None,
-            cwd=tmp_path / "work",
-            command_name="codex",
-        )
-        assert config.timeout == 3600.0

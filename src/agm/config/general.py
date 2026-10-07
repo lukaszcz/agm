@@ -54,15 +54,6 @@ class GeneralConfig:
         return cls(layers=ordered_layers, merged=merged)
 
 
-class ConfigCommandNotFound(ValueError):
-    """Raised when a named command config table is required but missing."""
-
-    def __init__(self, *, section_name: str, command_name: str) -> None:
-        self.section_name = section_name
-        self.command_name = command_name
-        super().__init__(f"{section_name} subcommand {command_name!r} is not defined in config")
-
-
 # Known path-like fields per config section. Values interpolate ``%{name}``
 # environment variables, expand ``~``, and resolve against the config file's directory
 # before merging, so that relative paths are always interpreted relative to
@@ -71,38 +62,6 @@ class ConfigCommandNotFound(ValueError):
 _CONFIG_PATH_FIELDS: dict[str, Sequence[str]] = {
     # ``[exec]`` carries exactly the path-valued engine keys.
     "exec": PATH_ENGINE_KEYS,
-    "loop": [
-        "tasks_dir",
-        "prompt_file",
-        "selector_prompt_file",
-        "extra_prompt_file",
-        "extra_selector_prompt_file",
-        "log-file",
-    ],
-    "review": [
-        "prompt_file",
-        "extra_prompt_file",
-        "review_file",
-        "log-file",
-    ],
-    "revise": [
-        "prompt_file",
-        "extra_prompt_file",
-        "log-file",
-    ],
-    "refine": [
-        "review_prompt_file",
-        "extra_review_prompt_file",
-        "revise_prompt_file",
-        "extra_revise_prompt_file",
-        "log-file",
-    ],
-}
-
-_CONFIG_PATH_SENTINELS: dict[str, dict[str, set[str]]] = {
-    "review": {
-        "review_file": {"auto", "none"},
-    },
 }
 
 
@@ -115,20 +74,6 @@ def _merge_config(base: TomlDict, override: TomlDict) -> TomlDict:
             continue
         merged[key] = value
     return merged
-
-
-def resolve_agm_path(*, home: Path, relative_path: Path) -> Path:
-    candidates = agm_path_candidates(home=home, relative_path=relative_path)
-    for candidate in reversed(candidates):
-        if candidate.is_file():
-            return candidate
-    return candidates[-1]
-
-
-def resolve_default_prompt_file(filename: str, *, home: Path) -> Path:
-    """Resolve a default prompt file from the AGM prompt directory."""
-
-    return resolve_agm_path(home=home, relative_path=Path("prompts") / filename)
 
 
 def config_file_candidates(
@@ -180,73 +125,6 @@ class RunConfig:
         return self.pty.for_command(command_name)
 
 
-@dataclass(frozen=True)
-class LoopConfig:
-    """Resolved loop-command configuration."""
-
-    runner: str | None
-    selector: str | None
-    no_selector: bool
-    tasks_dir: str | None
-    prompt: str | None
-    prompt_file: str | None
-    selector_prompt: str | None
-    selector_prompt_file: str | None
-    extra_prompt: str | None
-    extra_prompt_file: str | None
-    extra_selector_prompt: str | None
-    extra_selector_prompt_file: str | None
-    timeout: float | None
-
-
-@dataclass(frozen=True)
-class ReviewConfig:
-    """Resolved review-command configuration."""
-
-    runner: str | None
-    scope: str | None
-    aspects: str | None
-    extra_aspects: str | None
-    prompt: str | None
-    prompt_file: str | None
-    extra_prompt: str | None
-    extra_prompt_file: str | None
-    review_file: str | None
-
-
-@dataclass(frozen=True)
-class ReviseConfig:
-    """Resolved revise-command configuration."""
-
-    runner: str | None
-    prompt: str | None
-    prompt_file: str | None
-    extra_prompt: str | None
-    extra_prompt_file: str | None
-
-
-@dataclass(frozen=True)
-class RefineConfig:
-    """Resolved refine-command configuration."""
-
-    max_steps: int | None
-    no_max_steps: bool
-    runner: str | None
-    reviewer: str | None
-    reviser: str | None
-    scope: str | None
-    aspects: str | None
-    review_prompt: str | None
-    review_prompt_file: str | None
-    extra_review_prompt: str | None
-    extra_review_prompt_file: str | None
-    revise_prompt: str | None
-    revise_prompt_file: str | None
-    extra_revise_prompt: str | None
-    extra_revise_prompt_file: str | None
-    save_review: bool
-
-
 def _interpolate_and_expand_section_paths(
     section: TomlDict,
     fields: Sequence[str],
@@ -270,7 +148,6 @@ def _anchor_section_paths(
     config_dir: Path,
     cwd: Path,
     *,
-    sentinels: dict[str, set[str]],
     unresolved_fields: set[str],
 ) -> TomlDict:
     resolved = dict(section)
@@ -280,7 +157,7 @@ def _anchor_section_paths(
             continue
         # Values with unresolved holes are not usable paths, so leave them
         # unanchored. Interpolation has already run exactly once above.
-        if field in unresolved_fields or value in sentinels.get(field, set()):
+        if field in unresolved_fields:
             continue
         path = Path(value)
         if path.is_absolute():
@@ -298,8 +175,6 @@ def resolve_section_paths(
     fields: Sequence[str],
     config_dir: Path,
     cwd: Path,
-    *,
-    sentinels: dict[str, set[str]],
 ) -> TomlDict:
     """Interpolate and anchor *section*'s path-like *fields* to *config_dir*.
 
@@ -314,14 +189,11 @@ def resolve_section_paths(
         fields,
         config_dir,
         cwd,
-        sentinels=sentinels,
         unresolved_fields=unresolved_fields,
     )
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
-            resolved[key] = resolve_section_paths(
-                toml_dict(value), fields, config_dir, cwd, sentinels=sentinels
-            )
+            resolved[key] = resolve_section_paths(toml_dict(value), fields, config_dir, cwd)
     return resolved
 
 
@@ -338,7 +210,6 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
                 fields,
                 config_dir,
                 cwd,
-                sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
             )
     return resolved
 
@@ -423,102 +294,6 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     )
 
 
-def load_loop_config(
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-    command_name: str | None = None,
-    require_command: bool = False,
-) -> LoopConfig:
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    return loop_config_from_merged(
-        merged, command_name=command_name, require_command=require_command
-    )
-
-
-def loop_config_from_merged(
-    merged: TomlDict,
-    *,
-    command_name: str | None = None,
-    require_command: bool = False,
-) -> LoopConfig:
-    """Build :class:`LoopConfig` from an already-merged config dict.
-
-    Split out from :func:`load_loop_config` so a caller that already holds a
-    merged config (e.g. the shared default agent runner) can derive
-    the ``[loop]`` section without re-reading and re-merging the files.
-    """
-    selected_loop_table = _select_command_table(
-        toml_dict(merged.get("loop")),
-        section_name="loop",
-        command_name=command_name,
-        require_command=require_command,
-    )
-    runner = selected_loop_table.get("runner")
-    selector = selected_loop_table.get("selector")
-    no_selector_raw = selected_loop_table.get("no_selector")
-    tasks_dir = selected_loop_table.get("tasks_dir")
-    resolved_runner = runner if isinstance(runner, str) and runner.strip() else None
-    resolved_selector = selector if isinstance(selector, str) and selector.strip() else None
-    resolved_no_selector = bool(no_selector_raw) if isinstance(no_selector_raw, bool) else False
-    resolved_tasks_dir = tasks_dir if isinstance(tasks_dir, str) and tasks_dir.strip() else None
-    prompt = selected_loop_table.get("prompt")
-    prompt_file = selected_loop_table.get("prompt_file")
-    resolved_prompt = prompt if isinstance(prompt, str) and prompt.strip() else None
-    resolved_prompt_file = (
-        prompt_file if isinstance(prompt_file, str) and prompt_file.strip() else None
-    )
-    selector_prompt = selected_loop_table.get("selector_prompt")
-    selector_prompt_file = selected_loop_table.get("selector_prompt_file")
-    resolved_selector_prompt = (
-        selector_prompt if isinstance(selector_prompt, str) and selector_prompt.strip() else None
-    )
-    resolved_selector_prompt_file = (
-        selector_prompt_file
-        if isinstance(selector_prompt_file, str) and selector_prompt_file.strip()
-        else None
-    )
-    extra_prompt = selected_loop_table.get("extra_prompt")
-    extra_prompt_file = selected_loop_table.get("extra_prompt_file")
-    resolved_extra_prompt = (
-        extra_prompt if isinstance(extra_prompt, str) and extra_prompt.strip() else None
-    )
-    resolved_extra_prompt_file = (
-        extra_prompt_file
-        if isinstance(extra_prompt_file, str) and extra_prompt_file.strip()
-        else None
-    )
-    extra_selector_prompt = selected_loop_table.get("extra_selector_prompt")
-    extra_selector_prompt_file = selected_loop_table.get("extra_selector_prompt_file")
-    resolved_extra_selector_prompt = (
-        extra_selector_prompt
-        if isinstance(extra_selector_prompt, str) and extra_selector_prompt.strip()
-        else None
-    )
-    resolved_extra_selector_prompt_file = (
-        extra_selector_prompt_file
-        if isinstance(extra_selector_prompt_file, str) and extra_selector_prompt_file.strip()
-        else None
-    )
-    resolved_timeout = _optional_timeout(selected_loop_table, "timeout")
-    return LoopConfig(
-        runner=resolved_runner,
-        selector=resolved_selector,
-        no_selector=resolved_no_selector,
-        tasks_dir=resolved_tasks_dir,
-        prompt=resolved_prompt,
-        prompt_file=resolved_prompt_file,
-        selector_prompt=resolved_selector_prompt,
-        selector_prompt_file=resolved_selector_prompt_file,
-        extra_prompt=resolved_extra_prompt,
-        extra_prompt_file=resolved_extra_prompt_file,
-        extra_selector_prompt=resolved_extra_selector_prompt,
-        extra_selector_prompt_file=resolved_extra_selector_prompt_file,
-        timeout=resolved_timeout,
-    )
-
-
 def _optional_str(table: TomlDict, key: str) -> str | None:
     value = table.get(key)
     return value if isinstance(value, str) and value.strip() else None
@@ -536,15 +311,6 @@ def _optional_positive_int(table: TomlDict, key: str) -> int | None:
     return None
 
 
-def _optional_positive_int_or_unlimited(table: TomlDict, key: str) -> int | None:
-    value = table.get(key)
-    if isinstance(value, str) and value.strip().lower() == "unlimited":
-        return None
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    return None
-
-
 def _optional_bool(table: TomlDict, key: str, *, default: bool = False) -> bool:
     value = table.get(key)
     return value if isinstance(value, bool) else default
@@ -557,75 +323,6 @@ def _optional_timeout(table: TomlDict, key: str) -> float | None:
     if isinstance(value, str) and value.strip():
         return parse_timeout(value)
     return None
-
-
-def _select_command_table(
-    table: TomlDict,
-    *,
-    section_name: str,
-    command_name: str | None,
-    require_command: bool,
-) -> TomlDict:
-    if command_name is None:
-        return table
-    command_table = table.get(command_name)
-    if isinstance(command_table, dict):
-        return _merge_config(table, toml_dict(command_table))
-    if require_command:
-        raise ConfigCommandNotFound(section_name=section_name, command_name=command_name)
-    return table
-
-
-def load_review_config(
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-    command_name: str | None = None,
-    require_command: bool = True,
-) -> ReviewConfig:
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = _select_command_table(
-        toml_dict(merged.get("review")),
-        section_name="review",
-        command_name=command_name,
-        require_command=require_command,
-    )
-    return ReviewConfig(
-        runner=_optional_str(table, "runner"),
-        scope=_optional_str(table, "scope"),
-        aspects=_optional_str(table, "aspects"),
-        extra_aspects=_optional_str(table, "extra_aspects"),
-        prompt=_optional_str(table, "prompt"),
-        prompt_file=_optional_str(table, "prompt_file"),
-        extra_prompt=_optional_str(table, "extra_prompt"),
-        extra_prompt_file=_optional_str(table, "extra_prompt_file"),
-        review_file=_optional_str(table, "review_file"),
-    )
-
-
-def load_revise_config(
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-    command_name: str | None = None,
-    require_command: bool = True,
-) -> ReviseConfig:
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = _select_command_table(
-        toml_dict(merged.get("revise")),
-        section_name="revise",
-        command_name=command_name,
-        require_command=require_command,
-    )
-    return ReviseConfig(
-        runner=_optional_str(table, "runner"),
-        prompt=_optional_str(table, "prompt"),
-        prompt_file=_optional_str(table, "prompt_file"),
-        extra_prompt=_optional_str(table, "extra_prompt"),
-        extra_prompt_file=_optional_str(table, "extra_prompt_file"),
-    )
 
 
 @dataclass(frozen=True)
@@ -665,7 +362,7 @@ def exec_config_from_merged(
     derived from it rather than re-read. ``[exec]`` has no named sub-tables: a
     per-program override comes from the program's own qualified table, because
     an AgL program is identified by its module route rather than by a flat
-    name the way ``[loop.<command>]``'s runner is.
+    name the way ``[run.<command>]``'s settings are.
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
@@ -713,41 +410,6 @@ def exec_config_from_merged(
         default_sandbox=resolved_default_sandbox,
         debug=resolved_debug,
         parse_error_retries=resolved_parse_error_retries,
-    )
-
-
-def load_refine_config(
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-    command_name: str | None = None,
-    require_command: bool = True,
-) -> RefineConfig:
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = _select_command_table(
-        toml_dict(merged.get("refine")),
-        section_name="refine",
-        command_name=command_name,
-        require_command=require_command,
-    )
-    return RefineConfig(
-        max_steps=_optional_positive_int_or_unlimited(table, "max_steps"),
-        no_max_steps=_optional_bool(table, "no_max_steps"),
-        runner=_optional_str(table, "runner"),
-        reviewer=_optional_str(table, "reviewer"),
-        reviser=_optional_str(table, "reviser"),
-        scope=_optional_str(table, "scope"),
-        aspects=_optional_str(table, "aspects"),
-        review_prompt=_optional_str(table, "review_prompt"),
-        review_prompt_file=_optional_str(table, "review_prompt_file"),
-        extra_review_prompt=_optional_str(table, "extra_review_prompt"),
-        extra_review_prompt_file=_optional_str(table, "extra_review_prompt_file"),
-        revise_prompt=_optional_str(table, "revise_prompt"),
-        revise_prompt_file=_optional_str(table, "revise_prompt_file"),
-        extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
-        extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
-        save_review=_optional_bool(table, "save_review", default=True),
     )
 
 

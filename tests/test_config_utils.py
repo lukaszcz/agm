@@ -6,15 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agm.agent.runner import prepare_prompt_from_source
 from agm.config.general import (
-    ConfigCommandNotFound,
     _optional_bool,
-    load_loop_config,
     load_merged_config,
-    load_refine_config,
-    load_review_config,
-    load_revise_config,
     load_run_config,
 )
 from agm.config.sandbox import sandbox_settings_candidates
@@ -154,65 +148,6 @@ def test_load_run_config_falls_back_to_home_when_install_prefix_is_missing(
     assert config.alias_for("echo") == "printf"
 
 
-def test_load_loop_config_reads_tasks_dir(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nrunner = "claude -p"\nselector = "codex exec"\ntasks_dir = "custom/tasks"\n'
-    )
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    (cwd / "custom" / "tasks").mkdir(parents=True)
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.runner == "claude -p"
-    assert config.selector == "codex exec"
-    assert config.tasks_dir == str(cwd / "custom" / "tasks")
-
-
-def test_load_loop_config_prefers_command_specific_overrides(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "custom" / "tasks").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nrunner = "claude -p"\nselector = "opencode prompt"\ntasks_dir = "custom/tasks"\n'
-        '[loop.codex]\nrunner = "codex exec"\nselector = "claude --print"\n'
-        'tasks_dir = "codex/tasks"\n'
-    )
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    (cwd / "codex" / "tasks").mkdir(parents=True)
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd, command_name="codex")
-
-    assert config.runner == "codex exec"
-    assert config.selector == "claude --print"
-    assert config.tasks_dir == str(cwd / "codex" / "tasks")
-
-
-def test_load_loop_config_rejects_missing_required_named_section(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude -p"\n')
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    with pytest.raises(ConfigCommandNotFound) as exc_info:
-        load_loop_config(
-            home=home,
-            proj_dir=None,
-            cwd=cwd,
-            command_name="fronend",
-            require_command=True,
-        )
-
-    assert exc_info.value.section_name == "loop"
-    assert exc_info.value.command_name == "fronend"
-
-
 def test_load_run_config_prefers_dot_agm_memory_after_project_config(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -236,451 +171,6 @@ def test_load_run_config_prefers_dot_agm_memory_after_project_config(tmp_path: P
 
 
 # --- Path resolution and env var expansion in config file paths ---
-
-
-def test_load_loop_config_resolves_relative_prompt_file_against_config_dir(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "prompt.md").write_text("home prompt")
-    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "prompt.md"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == str(home / ".agm" / "prompt.md")
-
-
-def test_load_loop_config_resolves_relative_prompt_file_falls_back_to_cwd(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    # prompt.md does NOT exist in home/.agm/, so cwd fallback applies
-    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "prompt.md"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    (cwd / "prompt.md").write_text("cwd prompt")
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == str(cwd / "prompt.md")
-
-
-def test_load_loop_config_resolves_relative_selector_prompt_file_against_config_dir(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "select.md").write_text("home selector")
-    (home / ".agm" / "config.toml").write_text('[loop]\nselector_prompt_file = "select.md"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.selector_prompt_file == str(home / ".agm" / "select.md")
-
-
-def test_load_loop_config_resolves_relative_tasks_dir_against_config_dir(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "custom" / "tasks").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.tasks_dir == str(home / ".agm" / "custom" / "tasks")
-
-
-def test_load_loop_config_resolves_relative_tasks_dir_falls_back_to_cwd(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    # custom/tasks does NOT exist in home/.agm/, so cwd fallback applies
-    (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    (cwd / "custom" / "tasks").mkdir(parents=True)
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.tasks_dir == str(cwd / "custom" / "tasks")
-
-
-def test_load_loop_config_interpolates_path_fields_and_expands_tilde(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    home_dir = tmp_path / "user-home"
-    custom_dir = home_dir / "custom"
-    custom_dir.mkdir(parents=True)
-    (custom_dir / "prompt.md").write_text("expanded prompt")
-    monkeypatch.setenv("HOME", str(home_dir))
-    monkeypatch.setenv("AGM_TEST_DIR", "custom")
-
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "~/%{AGM_TEST_DIR}/prompt.md"\n'
-    )
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == str(custom_dir / "prompt.md")
-
-
-def test_load_loop_config_interpolates_env_vars_in_tasks_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MY_TASKS", "/opt/tasks")
-
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "%{MY_TASKS}"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.tasks_dir == "/opt/tasks"
-
-
-def test_load_loop_config_project_config_relative_paths_resolve_against_project_config_dir(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-
-    project = tmp_path / "project"
-    agm_dir = project / ".agm"
-    (agm_dir / "config").mkdir(parents=True)
-    (agm_dir / "config" / "config.toml").write_text('[loop]\nprompt_file = "proj-prompt.md"\n')
-    (agm_dir / "config" / "proj-prompt.md").write_text("project prompt")
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=agm_dir, cwd=cwd)
-
-    assert config.prompt_file == str(agm_dir / "config" / "proj-prompt.md")
-
-
-def test_load_loop_config_keeps_absolute_paths_unchanged(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "/absolute/path/prompt.md"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == "/absolute/path/prompt.md"
-
-
-def test_load_review_revise_and_refine_config_read_new_sections(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "review.md").write_text("review", encoding="utf-8")
-    (home / ".agm" / "revise.md").write_text("revise", encoding="utf-8")
-    (home / ".agm" / "config.toml").write_text(
-        "\n".join(
-            [
-                "[review]",
-                'runner = "reviewer"',
-                'scope = "branch"',
-                'aspects = "correctness"',
-                'extra_aspects = "tests"',
-                'prompt_file = "review.md"',
-                'review_file = "saved-review.md"',
-                "",
-                "[revise]",
-                'runner = "reviser"',
-                'prompt_file = "revise.md"',
-                "",
-                "[refine]",
-                "max_steps = 7",
-                'runner = "both"',
-                'reviewer = "review-only"',
-                'reviser = "revise-only"',
-                "save_review = true",
-                'review_prompt_file = "review.md"',
-                'revise_prompt_file = "revise.md"',
-            ]
-        )
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    review = load_review_config(home=home, proj_dir=None, cwd=cwd)
-    revise = load_revise_config(home=home, proj_dir=None, cwd=cwd)
-    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert review.runner == "reviewer"
-    assert review.extra_aspects == "tests"
-    assert review.prompt_file == str(home / ".agm" / "review.md")
-    assert review.review_file == str(cwd / "saved-review.md")
-    assert revise.runner == "reviser"
-    assert revise.prompt_file == str(home / ".agm" / "revise.md")
-    assert refine.max_steps == 7
-    assert refine.runner == "both"
-    assert refine.reviewer == "review-only"
-    assert refine.reviser == "revise-only"
-    assert refine.save_review is True
-    assert refine.review_prompt_file == str(home / ".agm" / "review.md")
-    assert refine.revise_prompt_file == str(home / ".agm" / "revise.md")
-
-
-def test_load_review_config_preserves_special_review_file_values(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[review]\nreview_file = "none"\n[review.frontend]\nreview_file = "auto"\n',
-        encoding="utf-8",
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    base = load_review_config(home=home, proj_dir=None, cwd=cwd)
-    frontend = load_review_config(
-        home=home,
-        proj_dir=None,
-        cwd=cwd,
-        command_name="frontend",
-    )
-
-    assert base.review_file == "none"
-    assert frontend.review_file == "auto"
-
-
-def test_load_review_config_resolves_prompt_paths_named_like_review_file_sentinels(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        "\n".join(
-            [
-                "[review]",
-                'prompt_file = "auto"',
-                'extra_prompt_file = "none"',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_review_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == str(cwd / "auto")
-    assert config.extra_prompt_file == str(cwd / "none")
-
-
-def test_load_review_revise_and_refine_config_read_named_sections(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "frontend-review.md").write_text("review", encoding="utf-8")
-    (home / ".agm" / "frontend-revise.md").write_text("revise", encoding="utf-8")
-    (home / ".agm" / "config.toml").write_text(
-        "\n".join(
-            [
-                "[review]",
-                'runner = "reviewer"',
-                'extra_prompt = "base review"',
-                "[review.frontend]",
-                'runner = "frontend-reviewer"',
-                'prompt_file = "frontend-review.md"',
-                "",
-                "[revise]",
-                'runner = "reviser"',
-                'extra_prompt = "base revise"',
-                "[revise.frontend]",
-                'runner = "frontend-reviser"',
-                'prompt_file = "frontend-revise.md"',
-                "",
-                "[refine]",
-                "max_steps = 7",
-                'runner = "both"',
-                "[refine.frontend]",
-                "max_steps = 3",
-                'reviewer = "frontend-review-only"',
-            ]
-        )
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    review = load_review_config(home=home, proj_dir=None, cwd=cwd, command_name="frontend")
-    revise = load_revise_config(home=home, proj_dir=None, cwd=cwd, command_name="frontend")
-    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd, command_name="frontend")
-
-    assert review.runner == "frontend-reviewer"
-    assert review.extra_prompt == "base review"
-    assert review.prompt_file == str(home / ".agm" / "frontend-review.md")
-    assert revise.runner == "frontend-reviser"
-    assert revise.extra_prompt == "base revise"
-    assert revise.prompt_file == str(home / ".agm" / "frontend-revise.md")
-    assert refine.max_steps == 3
-    assert refine.runner == "both"
-    assert refine.reviewer == "frontend-review-only"
-
-
-def test_load_review_config_rejects_missing_named_section(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[review]\nrunner = "reviewer"\n')
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    with pytest.raises(ConfigCommandNotFound) as exc_info:
-        load_review_config(home=home, proj_dir=None, cwd=cwd, command_name="fronend")
-
-    assert exc_info.value.section_name == "review"
-    assert exc_info.value.command_name == "fronend"
-
-
-def test_load_review_config_allows_optional_missing_named_section(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[review]\nrunner = "reviewer"\n')
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_review_config(
-        home=home,
-        proj_dir=None,
-        cwd=cwd,
-        command_name="fronend",
-        require_command=False,
-    )
-
-    assert config.runner == "reviewer"
-
-
-@pytest.mark.parametrize("template", ["$PROJ_DIR/prompt.md", "${PROJ_DIR}/prompt.md"])
-def test_load_loop_config_keeps_shell_style_variables_literal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    template: str,
-) -> None:
-    monkeypatch.setenv("PROJ_DIR", str(tmp_path / "expanded"))
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(f'[loop]\nprompt_file = "{template}"\n')
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == str(cwd / template)
-
-
-def test_load_loop_config_keeps_escaped_holes_literal_and_anchors_them(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "%{PROMPT_DIR}").mkdir()
-    (home / ".agm" / "%{PROMPT_DIR}" / "prompt.md").write_text("prompt")
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "\\\\%{PROMPT_DIR}/prompt.md"\n'
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == str(home / ".agm" / "%{PROMPT_DIR}" / "prompt.md")
-
-
-@pytest.mark.parametrize("template", ["%{MISSING}/prompt.md", "%{bad name}/prompt.md", "%{oops"])
-def test_load_loop_config_preserves_unresolved_or_malformed_holes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template: str
-) -> None:
-    monkeypatch.delenv("MISSING", raising=False)
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(f'[loop]\nprompt_file = "{template}"\n')
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.prompt_file == template
-
-
-def test_unresolved_config_path_surfaces_at_the_prompt_consumer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv("MISSING", raising=False)
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "%{MISSING}/prompt.md"\n')
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-    assert config.prompt_file is not None
-
-    with pytest.raises(SystemExit):
-        prepare_prompt_from_source(Path(config.prompt_file), temp_files=[], env={})
-
-    assert "%{MISSING}/prompt.md" in capsys.readouterr().err
-
-
-def test_unresolved_path_in_one_section_does_not_prevent_loading_another_section(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "%{MISSING}/prompt.md"\n\n[review]\nreview_file = "none"\n'
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_review_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert config.review_file == "none"
-
-
-def test_load_loop_config_resolves_command_specific_relative_paths_against_config_dir(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "codex-prompt.md").write_text("codex prompt")
-    (home / ".agm" / "config.toml").write_text('[loop.codex]\nprompt_file = "codex-prompt.md"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd, command_name="codex")
-
-    assert config.prompt_file == str(home / ".agm" / "codex-prompt.md")
-
-
-def test_load_loop_config_expands_user_tilde_in_prompt_file(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "~/prompts/prompt.md"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    config = load_loop_config(home=home, proj_dir=None, cwd=cwd)
-
-    expected = str(Path.home() / "prompts" / "prompt.md")
-    assert config.prompt_file == expected
 
 
 def test_sandbox_settings_candidates_fall_back_to_alias_command(tmp_path: Path) -> None:
@@ -733,38 +223,6 @@ class TestOptionalBool:
         assert _optional_bool({"flag": False}, "flag", default=True) is False
 
 
-def test_load_refine_config_no_max_steps(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        "[refine]\nno_max_steps = true\n",
-        encoding="utf-8",
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert refine.no_max_steps is True
-    assert refine.max_steps is None
-
-
-def test_load_refine_config_max_steps_unlimited(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[refine]\nmax_steps = "unlimited"\n',
-        encoding="utf-8",
-    )
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert refine.max_steps is None
-    assert refine.no_max_steps is False
-
-
 def test_config_path_interpolation_runs_once_and_resolves_program_trace_file(
     tmp_path: Path,
 ) -> None:
@@ -774,14 +232,14 @@ def test_config_path_interpolation_runs_once_and_resolves_program_trace_file(
     (config_dir / "%{PROMPT_DIR}").mkdir()
     (config_dir / "%{PROMPT_DIR}" / "prompt.md").write_text("prompt")
     (config_dir / "config.toml").write_text(
-        'version = 1\n[loop]\nprompt_file = "\\\\%{PROMPT_DIR}/prompt.md"\n'
+        'version = 1\n[exec]\ntrace-file = "\\\\%{PROMPT_DIR}/prompt.md"\n'
         '[program]\ntrace-file = "program.log"\n',
         encoding="utf-8",
     )
 
     merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
 
-    assert merged["loop"]["prompt_file"] == str(config_dir / "%{PROMPT_DIR}" / "prompt.md")
+    assert merged["exec"]["trace-file"] == str(config_dir / "%{PROMPT_DIR}" / "prompt.md")
     assert merged["program"]["trace-file"] == str(tmp_path / "program.log")
 
 
@@ -812,19 +270,18 @@ def test_a_later_layer_replaces_a_key_whose_kind_changed(tmp_path: Path) -> None
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "config.toml").write_text(
-        'version = 1\nagent = "claude"\n[loop]\nprompt_file = "home.md"\n', encoding="utf-8"
+        'version = 1\nworkflow = "claude"\n', encoding="utf-8"
     )
 
     project = tmp_path / "project"
     (project / "config").mkdir(parents=True)
     (project / "config" / "config.toml").write_text(
-        'loop = "disabled"\n[agent]\ncommand = "codex"\n', encoding="utf-8"
+        '[workflow]\ncommand = "codex"\n', encoding="utf-8"
     )
 
     merged = load_merged_config(home=home, proj_dir=project, cwd=tmp_path)
 
-    assert merged["loop"] == "disabled"
-    assert merged["agent"] == {"command": "codex"}
+    assert merged["workflow"] == {"command": "codex"}
 
 
 def test_exec_trace_file_expands_tilde_and_interpolates(
@@ -848,68 +305,3 @@ def test_exec_trace_file_expands_tilde_and_interpolates(
     merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
 
     assert merged["exec"]["trace-file"] == str(home_dir / "logs" / "agm.log")
-
-
-def test_review_log_file_expands_tilde(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression test: [review]'s log-file field previously skipped tilde
-    expansion because it was only ever anchored, never interpolated/expanded,
-    by the removed second sweep in ``_resolve_config_file_paths``."""
-    home_dir = tmp_path / "user-home"
-    home_dir.mkdir()
-    monkeypatch.setenv("HOME", str(home_dir))
-
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[review]\nlog-file = "~/agm.log"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert merged["review"]["log-file"] == str(home_dir / "agm.log")
-
-
-def test_review_log_file_interpolates_env_vars(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression test: [review]'s log-file field previously skipped
-    ``%{name}`` interpolation entirely for the same reason as the tilde case
-    above."""
-    monkeypatch.setenv("SOMEVAR", "/opt/logs")
-
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[review]\nlog-file = "%{SOMEVAR}/agm.log"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert merged["review"]["log-file"] == "/opt/logs/agm.log"
-
-
-def test_review_log_file_unresolved_hole_stays_verbatim_and_does_not_raise(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The lenient miss policy for config path fields applies to [review]'s
-    log-file just like every other path field: an unresolved ``%{...}`` hole
-    is left verbatim and loading never raises."""
-    monkeypatch.delenv("MISSING", raising=False)
-
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[review]\nlog-file = "%{MISSING}/agm.log"\n')
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-
-    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
-
-    assert merged["review"]["log-file"] == "%{MISSING}/agm.log"

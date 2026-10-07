@@ -4,7 +4,7 @@ Coverage:
 - EngineSeedTiers.trace_decision: initial-value precedence (CLI > config file),
   default off, path resolution, explicit disable beats lower-layer enable, and
   agreement with the ``trace`` engine seed the same tiers produce.
-- resolve_log_file / prepare_trace_log with their enabled/path shapes.
+- prepare_trace_log path handling.
 - --trace flag parsing + mutual-exclusivity rejection in typer (cli.py) parser.
 - Integration: default run writes no trace; --trace writes one; [exec] trace=true writes one;
   --no-trace overrides config trace=true.
@@ -28,7 +28,7 @@ from agm.agl.semantics.values import BoolValue
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import EngineSeedTiers, build_host_engine_seeds
 from agm.config.general import exec_config_from_merged
-from agm.core.log import LiveTracePathResolver, TraceDecision, resolve_log_file
+from agm.core.log import LiveTracePathResolver, TraceDecision
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -189,46 +189,7 @@ def test_decision_agrees_with_the_seeded_trace_setting(
     assert tiers.trace_decision().enabled is seeded
 
 
-# ---------------------------------------------------------------------------
-# Unit tests: resolve_log_file with its enabled/log_file signature
-# ---------------------------------------------------------------------------
-
-
-class TestResolveLogFileNewShape:
-    def test_disabled_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
-        result = resolve_log_file(command_name="exec", enabled=False, log_file=None)
-        assert result is None
-
-    def test_enabled_no_path_returns_auto_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
-        result = resolve_log_file(command_name="exec", enabled=True, log_file=None)
-        assert result is not None
-        assert result.name.startswith("exec-")
-        assert result.suffix == ".log"
-
-    def test_enabled_with_explicit_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        explicit = str(tmp_path / "my.jsonl")
-        result = resolve_log_file(command_name="exec", enabled=True, log_file=explicit)
-        assert result is not None
-        assert result == Path(explicit)
-
-    def test_enabled_with_relative_path_resolves(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        result = resolve_log_file(command_name="exec", enabled=True, log_file="out.jsonl")
-        assert result is not None
-        assert result.is_absolute()
-        assert result == tmp_path / "out.jsonl"
-
+class TestTraceLogPreparation:
     def test_trace_preparation_preserves_an_explicit_file_extension(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -237,22 +198,6 @@ class TestResolveLogFileNewShape:
         monkeypatch.chdir(tmp_path)
         path = prepare_trace_log(command_name="exec", enabled=True, trace_file="trace.log")
         assert path == tmp_path / "trace.log"
-
-    def test_unique_flag_differentiates_paths(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
-        from datetime import datetime as _dt
-
-        fixed = _dt(2026, 1, 1, 12, 0, 0)
-        with patch("agm.core.log.datetime") as mock_dt, patch("agm.core.log.os.getpid") as mock_pid:
-            mock_dt.now.return_value = fixed
-            mock_pid.return_value = 11111
-            path_a = resolve_log_file(command_name="exec", enabled=True, log_file=None, unique=True)
-            mock_pid.return_value = 22222
-            path_b = resolve_log_file(command_name="exec", enabled=True, log_file=None, unique=True)
-        assert path_a != path_b
 
 
 # ---------------------------------------------------------------------------

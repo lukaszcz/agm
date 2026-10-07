@@ -95,7 +95,7 @@ class TestKeepIndentedParagraphs:
         assert _wrapped(text) == text
 
     def test_the_transform_is_idempotent(self) -> None:
-        once = keep_indented_paragraphs("Examples:\n  agm refine main\n\nProse.")
+        once = keep_indented_paragraphs("Examples:\n  agm exec main\n\nProse.")
 
         assert keep_indented_paragraphs(once) == once
 
@@ -105,11 +105,11 @@ class TestKeepIndentedParagraphs:
         )
 
     def test_the_common_indentation_of_a_docstring_is_removed(self) -> None:
-        text = "\n    Refine.\n\n    Examples:\n      agm refine\n      agm refine tip\n"
+        text = "\n    Run.\n\n    Examples:\n      agm exec\n      agm exec tip\n"
 
-        assert _wrapped(text) == "Refine.\n\nExamples:\n  agm refine\n  agm refine tip"
+        assert _wrapped(text) == "Run.\n\nExamples:\n  agm exec\n  agm exec tip"
 
     def test_a_whitespace_only_line_separates_paragraphs(self) -> None:
-        text = "Refine\nthis.\n   \nExamples:\n  agm refine\n  agm refine tip"
+        text = "Run\nthis.\n   \nExamples:\n  agm exec\n  agm exec tip"
 
-        assert _wrapped(text) == "Refine this.\n\nExamples:\n  agm refine\n  agm refine tip"
+        assert _wrapped(text) == "Run this.\n\nExamples:\n  agm exec\n  agm exec tip"

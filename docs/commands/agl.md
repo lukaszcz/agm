@@ -55,7 +55,7 @@ The standard library is the first of:
 `[modules] lib_root` and `roots` expand `%{VAR}` leniently, like other
 [path-valued settings](config.md#path-valued-settings).
 
-`AGM_HOME` selects the whole runtime home (config, prompts, sandbox settings, global library,
+`AGM_HOME` selects the whole runtime home (config, sandbox settings, global library,
 package store); by default AGM uses a populated `.agm` beside the executable, then `~/.agm`.
 `AGM_STDLIB` relocates only the standard library.
 
@@ -426,13 +426,11 @@ the value as given, and `effective_agent`, the agent dispatched.
 
 The argv an `Agent` builds (an `AgentCommand`'s command string; provider records' fixed flags)
 interpolates `%{name}` strictly from the process environment plus `PROMPT_FILE`, which wins on
-conflicts. Unlike `agm loop`'s runner and selector, no workflow variables are added. The `%%`
-alias, `\%{` escape, and shlex splitting follow
-[Runner command interpolation](agents.md#runner-command-interpolation). A prompt-file
-placeholder places the prompt file there; otherwise AGM appends `@<path>`, except `AgentCodex`,
-which pipes the prompt on stdin. AgL text literals interpolate `%{…}` themselves, so write
-`\%{PROMPT_FILE}` inside `AgentCommand("…")`. An unresolvable hole raises a catchable
-`AgentCallError` with `cause` `"interpolation_failure"`.
+conflicts. No workflow variables are added. The `%%` alias, `\%{` escape, and shlex splitting
+follow the same runner argument rules. A prompt-file placeholder places the prompt file there;
+otherwise AGM appends `@<path>`, except `AgentCodex`, which pipes the prompt on stdin. AgL text
+literals interpolate `%{…}` themselves, so write `\%{PROMPT_FILE}` inside `AgentCommand("…")`.
+An unresolvable hole raises a catchable `AgentCallError` with `cause` `"interpolation_failure"`.
 
 ### Session runners
 

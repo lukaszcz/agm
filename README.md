@@ -39,7 +39,7 @@ just setup
 ```
 
 Install the CLI with the runtime versions from `uv.lock` into an isolated `uv tool`
-environment and copy AGM config files, prompts, and sandbox templates into the selected
+environment and copy AGM config files and sandbox templates into the selected
 AGM home (`$AGM_HOME`, or `$HOME/.agm/` by default). The config installer refreshes the
 managed standard library; the recipe reinstalls the other packages under `packages/` with
 `agm pkg install --reinstall`, then runs `agm pkg sync` to restore the active packages'
@@ -335,55 +335,6 @@ agl> let n = 21 * 2             # bindings persist across entries → "n : int =
 
 See `agm help repl` and [docs/commands/agl.md](docs/commands/agl.md#agm-repl) for the full reference, and the
 [AgL language reference](docs/agl/reference/index.md) for the language.
-
-### `agm review`
-
-Run the review prompt. Review output is saved to a timestamped file by default.
-
-```bash
-agm review
-agm review --scope "full codebase" implement_feature
-```
-
-### `agm revise`
-
-Run the revision prompt against a review file.
-
-```bash
-agm revise .agent-files/review-20260101-120000-000000.md
-agm revise implement_feature .agent-files/review-20260101-120000-000000.md
-```
-
-### `agm refine`
-
-Run review/revise cycles until the revise response is `COMPLETE` or the step limit is reached.
-
-```bash
-agm refine
-agm refine --max-steps 10 implement_feature
-```
-
-### `agm loop`
-
-Run an iterative prompt loop using a configured runner, with optional selector-based task
-selection.
-
-```bash
-agm loop implement_feature
-agm loop run review --runner "claude -p"
-agm loop step fix_tests --log-file loop.log
-agm loop select review --selector "codex exec"
-```
-
-**Config** — Loop configuration is loaded from merged `config.toml` `[loop]` and `[loop.<command>]`
-sections. CLI flags override config values; `RUNNER_ARGS` are appended to the final runner command.
-
-**Subcommands**:
-
-- `agm loop step` — single loop iteration
-- `agm loop select` — run `select.md` once; requires selector mode
-
-See `agm help loop` for selector/no-selector mode, prompt options, timeout, and logging details.
 
 ### `agm run`
 

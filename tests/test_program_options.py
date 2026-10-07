@@ -1210,11 +1210,11 @@ class TestRenderHelp:
         assert "Tags one artifact." in command.render_help("main")
 
     def test_an_indented_example_block_in_the_program_doc_keeps_its_lines(self) -> None:
-        doc = "Refines a subject.\n\nExamples:\n  agm refine main\n  agm refine tip\n"
+        doc = "Runs a workflow.\n\nExamples:\n  agm exec main\n  agm exec tip\n"
 
         text = _command(doc=doc).render_help("main")
 
-        assert "  Examples:\n    agm refine main\n    agm refine tip\n" in text
+        assert "  Examples:\n    agm exec main\n    agm exec tip\n" in text
         assert "\x08" not in text
 
     def test_prose_in_the_program_doc_still_rewraps(self) -> None:

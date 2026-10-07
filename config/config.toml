@@ -9,12 +9,6 @@ alias = "claude --dangerously-skip-permissions"
 [run.codex]
 alias = "codex --yolo --no-daemon"
 
-[loop.claude]
-runner = "claude -p '@%{PROMPT_FILE}'"
-
-[loop.pi]
-runner = "agm run pi -p '@%{PROMPT_FILE}'"
-
 # [exec] — AgL workflow settings (agm exec).
 # Uncomment and adjust as needed; all fields are optional.
 #

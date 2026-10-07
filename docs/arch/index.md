@@ -1,6 +1,6 @@
 # AGM Architecture Overview
 
-AGM is an Agent Project Management CLI. It does two largely independent jobs: it sets up and operates *agent-oriented project directories* (workspaces, git worktrees, dependencies, sandboxes, tmux sessions, agent loops), and it implements *AgL*, a statically typed workflow language whose programs orchestrate agents and shell commands. A single `agm` executable exposes both.
+AGM is an Agent Project Management CLI. It does two largely independent jobs: it sets up and operates *agent-oriented project directories* (workspaces, git worktrees, dependencies, sandboxes, tmux sessions), and it implements *AgL*, a statically typed workflow language whose programs orchestrate agents and shell commands. A single `agm` executable exposes both.
 
 Start here for the system shape, then read only the subsystem documents relevant to the task.
 
@@ -20,7 +20,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - **Commands orchestrate; primitives do.** Command modules wire config, project layout, git, and agents together. Reusable behavior lives in `util/`, `core/`, `project/`, `vcs/`, `config/`, and `agent/`, never copied into individual commands.
 - **Configuration is layered TOML.** Settings merge across install, home, project, and workspace scopes; per-command sections override base sections; AgL source writes and CLI flags override the file layers for the relevant commands.
 - **The filesystem is the project model.** A project is a directory layout (embedded or split) plus git worktrees and dependency checkouts. AGM detects state from disk rather than maintaining a separate database.
-- **Real agents are never run in tests, and never assumed.** Agent invocation is a subprocess boundary with output capture or interactive terminal handoff; runners are resolved from config and always have a default floor.
+- **Agent calls have a shared host boundary.** AgL resolves typed agent values and dispatches them through shared subprocess and session services with captured output or interactive terminal handoff.
 - **AgL is firewalled, not isolated.** Its static passes depend only on a stable AST, never on the parser, and its execution façade is lazily imported by its CLI and package-domain callers. It still reuses the shared layers below it rather than reimplementing them.
 
 ## What To Read Next
@@ -31,7 +31,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - [workspaces.md](workspaces.md) — project layout, git worktrees, dependencies, sync, and tmux: the project-management half of AGM.
 - [packages.md](packages.md) — package manifests, identity, dependencies, validation, and registered commands; [package-store.md](package-store.md) — the store, activation, installation, and the managed `std` package.
 - [sandbox.md](sandbox.md) — the sandbox preparation library, `agm run`, the SRT backend, and resource limits.
-- [agents.md](agents.md) — the agent runner, sessions, and the loop/review/revise/refine workflows.
+- [agents.md](agents.md) — agent invocation, defaults, and sessions used by AgL.
 - [agl/index.md](agl/index.md) — start here for any AgL language task; it links to the frontend, execution, module, hosting, and REPL documents.
 - [testing.md](testing.md) — tests, coverage, and the repository quality gates.
 

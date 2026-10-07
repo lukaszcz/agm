@@ -32,15 +32,6 @@ def is_portable_relative_path(value: str) -> bool:
     )
 
 
-def path_from_cli(value: str, *, cwd: Path) -> Path:
-    """Resolve a CLI path value relative to *cwd*."""
-
-    path = Path(value)
-    if path.is_absolute():
-        return path
-    return cwd / path
-
-
 def display_path(path: Path, *, cwd: Path | None = None) -> str:
     """Return a user-facing string for *path*.
 

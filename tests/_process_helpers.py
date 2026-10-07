@@ -188,10 +188,9 @@ class FakeShell:
 # ---------------------------------------------------------------------------
 # Agent boundary
 #
-# Every loop, review, revise and refine agent call is spawned through the
-# ``run_capture`` subprocess helper.  Faking it there — rather than stubbing
-# the AGM functions above it — leaves runner resolution, command
-# interpolation, prompt rendering, task selection, output streaming and
+# Every agent call is spawned through the ``run_capture`` subprocess helper.
+# Faking it there — rather than stubbing the AGM functions above it — leaves
+# runner resolution, interpolation, prompt rendering, output streaming and
 # temp-file cleanup running for real.
 # ---------------------------------------------------------------------------
 

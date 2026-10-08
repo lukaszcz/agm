@@ -20,7 +20,9 @@ These tests drive multi-module AgL programs through ``resolve_program`` and asse
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
+from weakref import ref
 
 import pytest
 
@@ -50,6 +52,7 @@ from agm.agl.syntax.nodes import (
     VarRef,
 )
 from agm.agl.syntax.visitor import walk
+from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
@@ -66,6 +69,44 @@ from tests.agl.qualifier_support import graph_verdict, span_text
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("read_sources", [False, True])
+def test_discarded_program_releases_its_source_reader(tmp_path: Path, read_sources: bool) -> None:
+    graph = _make_graph_from_files(tmp_path, {"entry": "()"}, default_stdlib=False)
+    resolved = resolve_program(graph)
+    reader = ref(resolved.sources)
+    if read_sources:
+        resolved.sources(ENTRY_ID)
+    del resolved
+    assert reader() is None
+
+
+def test_program_retains_reusable_source_readings(tmp_path: Path) -> None:
+    graph = _make_graph_from_files(tmp_path, {"entry": "()"}, default_stdlib=False)
+    resolved = resolve_program(graph)
+    sources = ref(resolved.sources(ENTRY_ID))
+    assert sources() is not None
+    assert resolved.sources(ENTRY_ID) is sources()
+    del resolved
+    assert sources() is None
+
+
+def test_discarded_check_releases_its_type_environments(tmp_path: Path) -> None:
+    graph = _make_graph_from_files(
+        tmp_path, {"entry": "type Number = int\nlet n: Number = 1"}, default_stdlib=False
+    )
+    resolved = resolve_program(graph)
+    existing = {id(obj) for obj in gc.get_objects() if isinstance(obj, TypeEnvironment)}
+    checked = check_program(resolved, base_caps())
+    environments = [
+        ref(obj)
+        for obj in gc.get_objects()
+        if isinstance(obj, TypeEnvironment) and id(obj) not in existing
+    ]
+    del checked
+    assert environments
+    assert all(environment() is None for environment in environments)
 
 
 def _rejection(

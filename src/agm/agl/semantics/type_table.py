@@ -834,9 +834,12 @@ class TypeTable:
 
     def _file_method(self, candidates: dict[DeclKey, MethodDef], method: MethodDef) -> None:
         """Move *method*'s declaration into *candidates*, recording where it lands."""
-        self._remove_method_declaration(method.declaration_key)
-        candidates[method.declaration_key] = method
-        self._method_sites[method.declaration_key] = candidates
+        key = method.declaration_key
+        if candidates.get(key) is method:
+            return
+        self._remove_method_declaration(key)
+        candidates[key] = method
+        self._method_sites[key] = candidates
 
     def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
         """Register *method* under its declaration key on *decl_id*."""

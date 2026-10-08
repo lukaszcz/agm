@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Regex for a valid identifier segment: must start with letter or underscore,
 # followed by letters, digits, underscores, or hyphens. AgL names are
@@ -44,6 +44,17 @@ class ModuleId:
     """
 
     segments: tuple[str, ...]
+    _hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_hash", hash(self.segments))
+
+    def __hash__(self) -> int:
+        return self._hash
+
+    def __reduce__(self) -> tuple[type[ModuleId], tuple[tuple[str, ...]]]:
+        # Recompute the process-local hash when restoring a persisted artifact.
+        return type(self), (self.segments,)
 
     # ------------------------------------------------------------------
     # Entry-id discrimination

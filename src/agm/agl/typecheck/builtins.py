@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, cast
+from weakref import proxy
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.constraints import ConstraintBounds
@@ -267,7 +268,8 @@ class BuiltinCallChecker:
     _SESSION_FIXED_ASK_ARGS: frozenset[str] = frozenset({"sandbox", "env"})
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
-        self._ctx = ctx
+        # The checker owns this helper; do not keep the checker alive.
+        self._ctx = cast(BuiltinCheckCtx, proxy(ctx))
         # Contracts already found coherent (:meth:`_check_host_contract_coherent`).
         # The verdict depends only on the declaration and the type table, not
         # on the call site, and every obligation is checked after registration

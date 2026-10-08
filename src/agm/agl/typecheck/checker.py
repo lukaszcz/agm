@@ -236,9 +236,9 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
-    assert_checked_module_closed,
     dereference_slot_binding,
     dereference_slot_constructor_ref,
+    seal_checked_module,
 )
 from agm.agl.typecheck.function_inference import (
     BuiltinResolvedReceiver,
@@ -6971,19 +6971,18 @@ def _check_prepared_module(
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
     declaration_spans: Mapping[DeclarationKey, SourceSpan] | None = None,
+    validate_shared_tables: bool = True,
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
-    ``check_program``'s Phase 4 enters here after preparing each module's
-    environment; this is also the sanctioned white-box seam for a test that
-    drives ``_Checker`` against a hand-built or mutated ``ModuleResolution``
-    with no real module graph behind it. ``_Checker`` owns expression-region
-    close/finalize validation, so this boundary never returns provisional
-    inference state.
+    The program driver prepares headers and candidates graph-wide; this is also
+    the single-module seam for tests with hand-built resolver output. ``_Checker``
+    owns expression-region close/finalize validation, so this boundary never
+    returns provisional inference state.
 
-    ``prepare_headers`` runs the type-table build and function-header
-    pre-registration; the program driver disables it because Phase 3 already
-    seeded this environment before candidate inference.
+    ``prepare_headers`` runs type-table and function-header preparation. The
+    program driver disables it and validates shared tables once at its graph
+    boundary instead of separately for each module.
     """
     if prepare_headers:
         prepare_module_headers(
@@ -7008,7 +7007,7 @@ def _check_prepared_module(
     )
     checker.check_body(resolved.program)
     checked = checker.result()
-    checked.type_env.seal()
-    if self_validation_enabled():
-        assert_checked_module_closed(checked)
+    seal_checked_module(checked)
+    if self_validation_enabled() and validate_shared_tables:
+        checked.type_env.assert_shared_tables_closed()
     return checked

@@ -682,8 +682,8 @@ def assert_checked_output_closed(
     )
 
 
-def assert_checked_module_output_closed(checked: CheckedModule) -> None:
-    """Assert that one module's own checked output is safe to lower."""
+def _assert_checked_module_annotations_closed(checked: CheckedModule) -> None:
+    """Validate type-bearing annotations independently of environment sealing."""
     assert_checked_output_closed(
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
@@ -694,6 +694,11 @@ def assert_checked_module_output_closed(checked: CheckedModule) -> None:
         explicit_builtin_targets=checked.explicit_builtin_targets,
         owner=f"checked module {checked.module_id.path_str()}",
     )
+
+
+def assert_checked_module_output_closed(checked: CheckedModule) -> None:
+    """Assert that one module's own checked output is safe to lower."""
+    _assert_checked_module_annotations_closed(checked)
     # The environment's own binding table is not one of the side tables above
     # (it is validated as a whole by ``assert_closed``, independent of which
     # published node/call/signature happens to reference each binding).
@@ -704,6 +709,13 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
     """Assert that one module's checked output and the shared tables it reads are safe to lower."""
     assert_checked_module_output_closed(checked)
     checked.type_env.assert_shared_tables_closed()
+
+
+def seal_checked_module(checked: CheckedModule) -> None:
+    """Seal fresh module-local output, validating each component once."""
+    checked.type_env.seal()
+    if self_validation_enabled():
+        _assert_checked_module_annotations_closed(checked)
 
 
 # ---------------------------------------------------------------------------

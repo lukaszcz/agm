@@ -12,7 +12,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Protocol
+from typing import Protocol, cast
+from weakref import proxy
 
 from agm.agl.diagnostics import HiddenMemberError
 from agm.agl.modules.ids import ModuleId, render_route_member
@@ -142,7 +143,8 @@ class UseReader:
         scope_entity_kinds: Mapping[DeclarationKey, str],
         type_owners: TypeOwnerIndex,
     ) -> None:
-        self._sources = sources
+        # The owning source reader keeps this helper alive, not the reverse.
+        self._sources = cast(UseSources, proxy(sources))
         self._module_id = module_id
         self._scope_nodes = scope_nodes
         self._scope_entity_kinds = scope_entity_kinds

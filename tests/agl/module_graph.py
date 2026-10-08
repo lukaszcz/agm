@@ -467,8 +467,7 @@ def check_resolved(
     *,
     seed_env: TypeEnvironment | None = None,
 ) -> CheckedModule:
-    """Type-check an already-built ``ModuleResolution`` via ``check_program``'s
-    internal per-module entry point.
+    """Type-check an already-built ``ModuleResolution`` through the module test seam.
 
     For a test that hand-builds (or ``dataclasses.replace``-mutates) a
     ``ModuleResolution`` directly — because the property under test is a
@@ -477,7 +476,7 @@ def check_resolved(
     ``ModuleResolution`` object itself (asserting on it before checking, or
     re-checking it more than once) — there is no source text to hand to
     :func:`resolve_and_check_entry`. This calls ``_check_prepared_module``
-    (what ``check_program`` itself drives per module) directly: env setup,
+    (sharing the program driver's body checker) directly: env setup,
     then ``_check_prepared_module``. *capabilities* defaults to a
     general-purpose capability set when omitted; *seed_env* seeds the
     environment before checking, mirroring ``resolve_and_check_entry``'s

@@ -105,8 +105,9 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
     count = item.config.stash[_GC_TESTS] + 1
-    if count == 200:
-        gc.collect()
+    if count % 200 == 0:
+        gc.collect(2 if count == 1200 else 0)
+    if count == 1200:
         count = 0
     item.config.stash[_GC_TESTS] = count
 

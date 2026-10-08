@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import pickle
+import subprocess
+import sys
+
 import pytest
 
 from agm.agl.modules.ids import (
@@ -39,6 +44,37 @@ class TestModuleIdConstruction:
         b = ModuleId.from_path("foo/bar")
         assert a == b
         assert hash(a) == hash(b)
+
+    def test_hash_reuses_immutable_segments(self) -> None:
+        scans = 0
+
+        class MeasuredSegments(tuple[str, ...]):
+            def __hash__(self) -> int:
+                nonlocal scans
+                scans += 1
+                return super().__hash__()
+
+        mid = ModuleId(MeasuredSegments(("std", "option")))
+        assert hash(mid) == hash(mid)
+        assert scans == 1
+
+    def test_serialized_identity_is_hashable_with_another_process_seed(self) -> None:
+        mid = ModuleId.from_path("std/option")
+        payload = pickle.dumps({mid: "library"})
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import pickle, sys; from agm.agl.modules.ids import ModuleId; "
+                "values = pickle.loads(sys.stdin.buffer.read()); "
+                "assert values[ModuleId.from_path('std/option')] == 'library'",
+            ],
+            input=payload,
+            capture_output=True,
+            env=dict(os.environ, PYTHONHASHSEED="19"),
+            check=False,
+        )
+        assert result.returncode == 0
 
     def test_inequality(self) -> None:
         a = ModuleId.from_path("foo/bar")

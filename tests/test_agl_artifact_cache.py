@@ -895,20 +895,20 @@ def test_an_in_memory_reused_module_skips_closure_validation(
 
     It is the very object an earlier ``check_program`` call already sealed and
     validated; re-walking it on every subsequent compilation that imports it
-    would be pure waste. Only a rehydrated or freshly checked module reaches
-    ``assert_checked_module_output_closed``.
+    would be pure waste. Freshly published module annotations are validated;
+    rehydrated modules also validate their restored environment.
     """
     calls: list[ModuleId] = []
     from agm.agl.typecheck import program as program_module
 
-    original = program_module.assert_checked_module_output_closed
+    original = program_module._assert_checked_module_annotations_closed
 
-    def spied_assert_checked_module_closed(module: CheckedModule) -> None:
+    def validate_annotations(module: CheckedModule) -> None:
         calls.append(module.module_id)
         original(module)
 
     monkeypatch.setattr(
-        program_module, "assert_checked_module_output_closed", spied_assert_checked_module_closed
+        program_module, "_assert_checked_module_annotations_closed", validate_annotations
     )
 
     graph = make_inline_graph_from_files(

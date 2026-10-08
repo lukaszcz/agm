@@ -884,12 +884,30 @@ def contains_type_var(t: Type) -> bool:
     return any(isinstance(node, TypeVarType) for node in iter_type(t))
 
 
+_INFERENCE_VARIABLE_LEAVES = frozenset(
+    (
+        TextType,
+        JsonType,
+        BoolType,
+        IntType,
+        DecimalType,
+        ExceptionType,
+        UnitType,
+        BottomType,
+        TypeVarType,
+        InferenceVarType,
+    )
+)
 _INFERENCE_VARIABLE_CACHE: OrderedDict[int, tuple[Type, bool]] = OrderedDict()
 _INFERENCE_VARIABLE_CACHE_LOCK = Lock()
 
 
 def contains_inference_var(t: Type) -> bool:
     """Reuse bounded scans of immutable types for solver-owned flexible variables."""
+    if type(t) in _INFERENCE_VARIABLE_LEAVES:
+        return isinstance(t, InferenceVarType)
+    if isinstance(t, (RecordType, EnumType)) and not t.type_args:
+        return False
     key = id(t)
     with _INFERENCE_VARIABLE_CACHE_LOCK:
         cached = _INFERENCE_VARIABLE_CACHE.get(key)

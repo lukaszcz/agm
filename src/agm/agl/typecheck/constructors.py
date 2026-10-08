@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Literal, Protocol, TypeGuard, cast
+from weakref import proxy
 
 from agm.agl.diagnostics import type_name_not_a_value
 from agm.agl.scope.symbols import ConstructorRef, ModuleResolution
@@ -270,7 +271,8 @@ class ConstructorChecker:
     """
 
     def __init__(self, ctx: ConstructorCheckCtx) -> None:
-        self._ctx = ctx
+        # The checker owns this helper; do not keep the checker alive.
+        self._ctx = cast(ConstructorCheckCtx, proxy(ctx))
 
     def _constructor_has_default(
         self,

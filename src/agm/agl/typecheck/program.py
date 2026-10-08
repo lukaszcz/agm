@@ -84,6 +84,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Mapping, assert_never, cast
+from weakref import WeakValueDictionary
 
 from agm.agl.artifact_cache import (
     RetainedSources,
@@ -157,6 +158,7 @@ from agm.agl.typecheck.env import (
     ProgramAliasResolution,
     PublishedModuleSurface,
     TypeEnvironment,
+    _assert_checked_module_annotations_closed,
     _assert_checked_types_closed,
     assert_checked_module_output_closed,
     dereference_slot_constructor_ref,
@@ -234,7 +236,9 @@ def program_funcdefs(
 
 
 def assert_checked_program_closed(
-    checked: CheckedProgram, reused_modules: frozenset[ModuleId] = frozenset()
+    checked: CheckedProgram,
+    reused_modules: frozenset[ModuleId] = frozenset(),
+    sealed_modules: frozenset[ModuleId] = frozenset(),
 ) -> None:
     """Assert that all program-level checked output is safe to lower.
 
@@ -242,12 +246,16 @@ def assert_checked_program_closed(
     compilation that already sealed it. Its artifact is the very object that
     was validated then and is immutable, so re-asserting it can only reach the
     same conclusion; the whole-program tables below are rebuilt every call and
-    are always validated.
+    are always validated. A freshly sealed environment needs no second scan;
+    its newly published module annotations are still validated here.
     """
     for module_id, module in checked.modules.items():
         if module_id in reused_modules:
             continue
-        assert_checked_module_output_closed(module)
+        if module_id in sealed_modules:
+            _assert_checked_module_annotations_closed(module)
+        else:
+            assert_checked_module_output_closed(module)
     _assert_checked_types_closed(checked.program_type_table.values(), owner="checked module graph")
     # The remaining whole-program tables (the shared TypeTable and the generic /
     # alias maps) are the same instances on every module env, so validate them
@@ -346,7 +354,7 @@ def _resolve_body_for_one(
     item: _TypeDeclItem,
     per_module_builders: dict[ModuleId, _TypeBuilder],
     tables: ModuleTypeInterface,
-    cross_envs: dict[ModuleId, TypeEnvironment],
+    cross_envs: Mapping[ModuleId, TypeEnvironment],
 ) -> None:
     """Resolve the body of one type declaration and update the program tables.
 
@@ -579,7 +587,8 @@ def _build_program_type_table(
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full program tables and its own
     # module's ImportEnv so qualified and import-tail-exposed type refs resolve.
-    cross_envs: dict[ModuleId, TypeEnvironment] = {}
+    # Builders own these environments; alias callbacks must not retain them.
+    cross_envs: WeakValueDictionary[ModuleId, TypeEnvironment] = WeakValueDictionary()
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
     resolving_aliases: list[DeclKey] = []
     module_order = {mid: index for index, mid in enumerate(resolved.modules)}
@@ -1509,6 +1518,7 @@ def check_program(
     # above (see agm.agl.typecheck.env.EnvironmentFacts / CheckedModuleImage).
     checked_modules: dict[ModuleId, CheckedModule] = {}
     reused_modules: set[ModuleId] = set()
+    sealed_modules: set[ModuleId] = set()
     for mid in ordered_mids:
         cached = cached_checked_modules.get(mid)
         if isinstance(cached, CheckedModule) and cached.resolved is resolved.modules[mid].resolved:
@@ -1535,7 +1545,9 @@ def check_program(
             infer_candidates=False,
             candidate_records=candidate_records,
             declaration_spans=declaration_spans,
+            validate_shared_tables=False,
         )
+        sealed_modules.add(mid)
         cm = replace(
             cp,
             module_id=mid,
@@ -1575,7 +1587,7 @@ def check_program(
         else {},
     )
     if self_validation_enabled():
-        assert_checked_program_closed(checked, frozenset(reused_modules))
+        assert_checked_program_closed(checked, frozenset(reused_modules), frozenset(sealed_modules))
     if entry_seed_env is None:
         retain_checked_modules(retainable, capabilities, checked_modules)
     return checked

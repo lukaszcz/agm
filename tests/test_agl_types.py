@@ -89,16 +89,35 @@ def test_inference_variable_scans_reuse_immutable_types(
     assert sum(isinstance(typ, RecordType) for typ in inference_scans) <= 1
 
 
+@pytest.mark.parametrize(
+    ("typ", "flexible"),
+    [
+        (IntType(), False),
+        (TypeVarType("T"), False),
+        (RecordType("Leaf"), False),
+        (EnumType("Leaf"), False),
+        (ExceptionType("Leaf"), False),
+        (InferenceVarType(781_254), True),
+    ],
+)
+def test_leaf_inference_checks_need_no_scan(
+    inference_scans: list[Type], typ: Type, flexible: bool
+) -> None:
+    assert contains_inference_var(typ) is flexible
+    assert not inference_scans
+
+
 def test_inference_variable_scan_retention_is_bounded(inference_scans: list[Type]) -> None:
-    first = RecordType("EvictionScan", decl_id=900_000)
+    first = RecordType("EvictionScan", type_args=(IntType(),), decl_id=900_000)
     assert contains_inference_var(first) is False
     for decl_id in range(900_001, 909_001):
-        assert contains_inference_var(RecordType("EvictionScan", decl_id=decl_id)) is False
+        typ = RecordType("EvictionScan", type_args=(IntType(),), decl_id=decl_id)
+        assert contains_inference_var(typ) is False
 
     inference_scans.clear()
     assert contains_inference_var(first) is False
     assert contains_inference_var(first) is False
-    assert inference_scans == [first]
+    assert [typ for typ in inference_scans if isinstance(typ, RecordType)] == [first]
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ state — the same state a freshly started process would build for itself.
 from __future__ import annotations
 
 import array
+import gc
 import importlib
 import locale
 import os
@@ -219,6 +220,9 @@ def _child(request: Invocation, fds: Sequence[int], holding: Sequence[int]) -> N
 def _serve(socket_path: str) -> None:
     """Serve invocations until the worker that started this zygote is gone."""
     _preload()
+    # Imported metadata stays live; keep child GC from dirtying its shared pages.
+    gc.collect()
+    gc.freeze()
     worker = os.getppid()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
         server.bind(socket_path)

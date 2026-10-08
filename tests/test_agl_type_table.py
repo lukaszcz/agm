@@ -932,6 +932,36 @@ class TestExceptionAccessors:
 
 
 class TestMethodIndex:
+    @pytest.mark.parametrize("builtin", [False, True])
+    def test_unchanged_header_does_not_rewrite_its_method_index(
+        self, monkeypatch: pytest.MonkeyPatch, builtin: bool
+    ) -> None:
+        table = TypeTable()
+        owner = RecordType("Owner", decl_id=700018)
+        method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Owner",),
+            name="method",
+            decl_node_id=4,
+            signature=FunctionType(params=(TextType() if builtin else owner,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        if builtin:
+            table.register_builtin_method("text", method)
+        else:
+            table.register_method(owner, method)
+
+        def unexpected_removal(key: object) -> None:
+            raise AssertionError(key)
+
+        monkeypatch.setattr(table, "_remove_method_declaration", unexpected_removal)
+        if builtin:
+            table.register_builtin_method("text", method)
+            assert table.method_candidates(TextType(), "method") == (method,)
+        else:
+            table.register_method(owner, method)
+            assert table.method_candidates(owner, "method") == (method,)
+
     def test_registers_methods_for_record_enum_and_exception_owners(self) -> None:
         table = TypeTable()
         point = RecordType(name="Point", module_id=_LIB_ID, scope_path=("Models",), decl_id=700016)

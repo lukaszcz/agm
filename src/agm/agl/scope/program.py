@@ -26,10 +26,11 @@ Design
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
+from weakref import WeakValueDictionary
 
 from agm.agl.artifact_cache import (
     retain_module_declarations,
@@ -119,6 +120,35 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
+
+type _SourceLookup = Callable[[ModuleId], ModuleSources]
+
+
+class _SourceReader:
+    """Keep source readers reusable without owning their back-references."""
+
+    def __init__(
+        self,
+        resolvers: Mapping[ModuleId, ModuleSources],
+        build: Callable[[ModuleId, _SourceLookup], ModuleSources],
+        *,
+        keep_alive: bool = False,
+    ) -> None:
+        self._resolvers = resolvers
+        self._build = build
+        self._cached: MutableMapping[ModuleId, ModuleSources] = (
+            {} if keep_alive else WeakValueDictionary()
+        )
+
+    def __call__(self, module_id: ModuleId) -> ModuleSources:
+        resolver = self._resolvers.get(module_id)
+        if resolver is not None:
+            return resolver
+        found = self._cached.get(module_id)
+        if found is None:
+            found = self._build(module_id, self)
+            self._cached[module_id] = found
+        return found
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -1088,33 +1118,29 @@ def resolve_program(
     settling: set[ModuleId] = set()
 
     declared_in_program = _declarations_beneath(decl_info)
-    # What each cached module reads where its aliases are declared.
-    cached_sources: dict[ModuleId, ResolvedSources] = {}
 
-    def sources_of(module_id: ModuleId) -> ModuleSources:
-        resolver = resolvers.get(module_id)
-        if resolver is not None:
-            return resolver
-        found = cached_sources.get(module_id)
-        if found is None:
-            cached = resolved_modules[module_id]
-            session = module_id == graph.entry_id and retained_type_owners is not None
-            found = cached_sources[module_id] = ResolvedSources(
-                module_id,
-                cached.resolved,
-                cached.import_env,
-                all_public_types=all_public_types,
-                type_owners=(
-                    type_owners.with_retained(module_id, retained_type_owners)
-                    if session and retained_type_owners is not None
-                    else type_owners
-                ),
-                repl_session_type_paths=retained_type_owners if session else None,
-                decl_info=decl_info,
-                cross_module_constructor_refs=cross_module_constructor_refs,
-                site_sources=sources_of,
-            )
-        return found
+    def build_sources(module_id: ModuleId, site_sources: _SourceLookup) -> ResolvedSources:
+        cached = resolved_modules[module_id]
+        session = module_id == graph.entry_id and retained_type_owners is not None
+        return ResolvedSources(
+            module_id,
+            cached.resolved,
+            cached.import_env,
+            all_public_types=all_public_types,
+            type_owners=(
+                type_owners.with_retained(module_id, retained_type_owners)
+                if session and retained_type_owners is not None
+                else type_owners
+            ),
+            repl_session_type_paths=retained_type_owners if session else None,
+            decl_info=decl_info,
+            cross_module_constructor_refs=cross_module_constructor_refs,
+            site_sources=site_sources,
+        )
+
+    source_factory = _SourceReader(resolvers, build_sources)
+    # Readers call the independent factory, not the program's owning cache.
+    sources_of = _SourceReader(resolvers, lambda mid, _: source_factory(mid), keep_alive=True)
 
     def reached_paths(
         qname: QName,

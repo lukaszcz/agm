@@ -33,6 +33,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.types import IntT, NameT
 from agm.agl.typecheck import env as env_module
+from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import (
     AliasFact,
     BindingTypeFact,
@@ -44,7 +45,8 @@ from agm.agl.typecheck.env import (
     TypeFact,
 )
 from tests._agl_helpers import dummy_span
-from tests.agl.module_graph import check_resolved, resolve_inline_entry
+from tests.agl.ir_harness import base_caps
+from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_inline_entry
 
 # ---------------------------------------------------------------------------
 # Fact scenarios: one per journaled mutator, record + query
@@ -72,6 +74,64 @@ def test_persistent_environment_checks_each_type_identity_once(
     env.assert_closed()
     assert sum(typ is first for typ in scans) == 1
     assert sum(typ is second for typ in scans) == 1
+
+
+def test_checked_module_seals_local_types_without_repeated_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved = resolve_inline_entry("()", default_stdlib=False)
+    env = TypeEnvironment()
+    typ = RecordType("Marker", decl_id=900018, type_args=(IntType(),))
+    env.set_binding_type(900019, typ)
+    scans = 0
+    original = env_module.contains_inference_var
+
+    def scan(candidate: Type) -> bool:
+        nonlocal scans
+        if candidate is typ:
+            scans += 1
+        return original(candidate)
+
+    monkeypatch.setattr(env_module, "contains_inference_var", scan)
+    checked = _check_prepared_module(
+        resolved,
+        base_caps(),
+        env=env,
+        prepare_headers=False,
+        infer_candidates=False,
+    )
+    assert checked.type_env.binding_type_of(900019) is typ
+    assert scans == 1
+
+
+def test_program_validates_shared_declarations_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    validations = 0
+    original = TypeEnvironment.assert_shared_tables_closed
+
+    def validate(env: TypeEnvironment) -> None:
+        nonlocal validations
+        validations += 1
+        original(env)
+
+    monkeypatch.setattr(TypeEnvironment, "assert_shared_tables_closed", validate)
+    checked = resolve_and_check_entry("type Number = int", base_caps(), default_stdlib=False)
+    assert checked.type_env.declared_type_template(ENTRY_ID, "Number") == TypeTemplate(IntType())
+    assert validations == 1
+
+
+def test_program_validates_sealed_local_state_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    validations = 0
+    original = TypeEnvironment.assert_closed
+
+    def validate(env: TypeEnvironment) -> None:
+        nonlocal validations
+        validations += 1
+        original(env)
+
+    monkeypatch.setattr(TypeEnvironment, "assert_closed", validate)
+    checked = resolve_and_check_entry("type Number = int", base_caps(), default_stdlib=False)
+    assert checked.type_env.declared_type_template(ENTRY_ID, "Number") == TypeTemplate(IntType())
+    assert validations == 1
 
 
 _HELPER_SIG = FunctionSignature(params=(), result=IntType())

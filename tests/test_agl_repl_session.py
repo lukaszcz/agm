@@ -81,6 +81,7 @@ from tests.agl.qualifier_support import (
     eval_grouped_final,
     eval_setup_entries,
     legal_groupings,
+    module_root,
     origin_kinds,
     rejected,
 )
@@ -1456,11 +1457,11 @@ def _setup_groupings(expected: frozenset[tuple[int, ...]]) -> list[object]:
 
 
 def _color_and_n_session(tmp_path: Path) -> ReplSession:
-    """A fresh session over the same ``m``/``n`` modules as
-    ``TestRetainedAliasTargetIdentity._session``, under *tmp_path*."""
-    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
-    (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
-    return ReplSession(cwd=tmp_path)
+    """A fresh session over shared, immutable ``m``/``n`` libraries."""
+    root = module_root(
+        tmp_path, {"m": "enum Color = Red | Green\n", "n": "enum Color = Red | Blue\n"}
+    )
+    return ReplSession(cwd=root)
 
 
 def _eval_grouped(session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]) -> None:
@@ -1789,9 +1790,7 @@ class TestRetainedAliasTargetIdentity:
     """
 
     def _session(self, tmp_path: Path) -> ReplSession:
-        (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
-        (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
-        return ReplSession(cwd=tmp_path)
+        return _color_and_n_session(tmp_path)
 
     @pytest.mark.parametrize(
         "use",
@@ -1878,13 +1877,8 @@ class TestRetainedAliasTargetIdentity:
         "sizes",
         _setup_groupings(_LOCALLY_SHADOWED_GROUPINGS),
     )
-    @pytest.mark.parametrize(
-        "use",
-        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
-        ids=("value", "pattern", "is", "type"),
-    )
     def test_a_hiding_alias_freezes_once_its_spelling_is_locally_shadowed(
-        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+        self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         """An alias declared through a ``hiding`` import keeps that hiding once
         its own spelling is shadowed by a later, unrelated local declaration,
@@ -1896,8 +1890,14 @@ class TestRetainedAliasTargetIdentity:
         _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
         assert s.eval_entry(self._LOCALLY_SHADOWED_PROBE).ok
 
-        with pytest.raises(HiddenMemberError):
-            s.type_of(use)
+        for use in (
+            "C::Red",
+            "case d of\n  | C::Red => 1\n  | _ => 2",
+            "d is C::Red",
+            "fn(x: C::Red) => 1",
+        ):
+            with pytest.raises(HiddenMemberError):
+                s.type_of(use)
 
     @pytest.mark.parametrize(
         "sizes",
@@ -1947,13 +1947,8 @@ class TestRetainedAliasTargetIdentity:
         "sizes",
         _setup_groupings(_REOPENED_UNDER_FRESH_ALIAS_GROUPINGS),
     )
-    @pytest.mark.parametrize(
-        "use",
-        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
-        ids=("value", "pattern", "is", "type"),
-    )
     def test_a_hiding_alias_freezes_once_its_spelling_is_reopened_under_a_fresh_alias(
-        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+        self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         """The same freeze as a plain unrestricted reimport, but the later
         step reopens the module under a fresh import alias and ``use``s it,
@@ -1962,8 +1957,14 @@ class TestRetainedAliasTargetIdentity:
         _eval_grouped(s, self._REOPENED_UNDER_FRESH_ALIAS_DECLS, sizes)
         assert s.eval_entry(self._REOPENED_UNDER_FRESH_ALIAS_PROBE).ok
 
-        with pytest.raises(HiddenMemberError):
-            s.type_of(use)
+        for use in (
+            "C::Red",
+            "case d of\n  | C::Red => 1\n  | _ => 2",
+            "d is C::Red",
+            "fn(x: C::Red) => 1",
+        ):
+            with pytest.raises(HiddenMemberError):
+                s.type_of(use)
 
     _BECOMES_AMBIGUOUS_DECLS = (
         "import m::* hiding Color::Red",
@@ -1977,13 +1978,8 @@ class TestRetainedAliasTargetIdentity:
         "sizes",
         _setup_groupings(_BECOMES_AMBIGUOUS_GROUPINGS),
     )
-    @pytest.mark.parametrize(
-        "use",
-        ("C::Red", "case d of\n  | C::Red => 1\n  | _ => 2", "d is C::Red", "fn(x: C::Red) => 1"),
-        ids=("value", "pattern", "is", "type"),
-    )
     def test_a_hiding_alias_freezes_once_its_spelling_becomes_ambiguous(
-        self, tmp_path: Path, use: str, sizes: tuple[int, ...]
+        self, tmp_path: Path, sizes: tuple[int, ...]
     ) -> None:
         """The same freeze, but the later step makes the spelling ambiguous
         between two imported modules instead of shadowing it with a local
@@ -1992,8 +1988,14 @@ class TestRetainedAliasTargetIdentity:
         _eval_grouped(s, self._BECOMES_AMBIGUOUS_DECLS, sizes)
         assert s.eval_entry(self._BECOMES_AMBIGUOUS_PROBE).ok
 
-        with pytest.raises(HiddenMemberError):
-            s.type_of(use)
+        for use in (
+            "C::Red",
+            "case d of\n  | C::Red => 1\n  | _ => 2",
+            "d is C::Red",
+            "fn(x: C::Red) => 1",
+        ):
+            with pytest.raises(HiddenMemberError):
+                s.type_of(use)
 
 
 class TestEnumVariantExpansionNeverContributesABareType:
@@ -2078,20 +2080,21 @@ class TestScopedRetainedAliasTargetIdentity:
         "sizes",
         _setup_groupings(_LOCALLY_SHADOWED_GROUPINGS),
     )
-    @pytest.mark.parametrize(
-        "use",
-        ("C::A", "case d of\n  | C::A => 1\n  | _ => 2", "d is C::A", "fn(x: C::A) => 1"),
-        ids=("value", "pattern", "is", "type"),
-    )
     def test_a_hiding_alias_freezes_once_its_spelling_is_locally_shadowed(
-        self, use: str, sizes: tuple[int, ...]
+        self, sizes: tuple[int, ...]
     ) -> None:
         s = ReplSession()
         _eval_grouped(s, self._LOCALLY_SHADOWED_DECLS, sizes)
         assert s.eval_entry(self._LOCALLY_SHADOWED_PROBE).ok
 
-        with pytest.raises(HiddenMemberError):
-            s.type_of(use)
+        for use in (
+            "C::A",
+            "case d of\n  | C::A => 1\n  | _ => 2",
+            "d is C::A",
+            "fn(x: C::A) => 1",
+        ):
+            with pytest.raises(HiddenMemberError):
+                s.type_of(use)
 
     def test_a_hiding_alias_frozen_by_shadowing_keeps_its_own_member_reachable(self) -> None:
         s = ReplSession()
@@ -2542,22 +2545,12 @@ def test_an_imported_generic_owners_referenced_member_is_rejected_when_applied(
 
 
 @pytest.mark.parametrize(
-    "use",
-    (
-        "C::A",
-        "case d of\n  | C::A => 1\n  | _ => 2",
-        "d is C::A",
-        "fn(x: C::A) => 1",
-    ),
-    ids=("value", "pattern", "is", "type"),
-)
-@pytest.mark.parametrize(
     "sizes",
     ((1, 1, 1, 1), (1, 2, 1)),
     ids=("1+1+1+1", "1+2+1"),
 )
 def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses(
-    sizes: tuple[int, ...], use: str
+    sizes: tuple[int, ...],
 ) -> None:
     """A local ``use ... hiding`` that narrows an earlier glob ``use`` must be
     honoured through an alias exactly as it is directly, in every position,
@@ -2577,8 +2570,14 @@ def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses(
         sizes,
     )
 
-    with pytest.raises(HiddenMemberError):
-        s.type_of(use)
+    for use in (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ):
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
 
 
 @pytest.mark.parametrize(
@@ -2627,17 +2626,12 @@ _RETAINED_BASE = (
 
 
 @pytest.mark.parametrize(
-    "use",
-    ("G::Inner(y = 1)", "fn(x: G::Inner) => 1", "G::Inner::Deep(z = 1)", "G::f()", "G::b"),
-    ids=("nested-value", "nested-type", "deeper", "function", "binding"),
-)
-@pytest.mark.parametrize(
     "sizes",
     ((1, 1, 1, 1), (1, 2, 1)),
     ids=("1+1+1+1", "1+2+1"),
 )
 def test_a_narrowing_local_use_hides_every_path_beneath_a_retained_alias_target(
-    tmp_path: Path, sizes: tuple[int, ...], use: str
+    tmp_path: Path, sizes: tuple[int, ...]
 ) -> None:
     """An alias of a type an earlier entry declared stands for every path
     beneath it, so a later local ``use ... hiding`` removing those paths hides
@@ -2655,8 +2649,15 @@ def test_a_narrowing_local_use_hides_every_path_beneath_a_retained_alias_target(
     )
 
     assert str(s.type_of("G(x = 1)")) == "record s::Base\n  x: int"
-    with pytest.raises(HiddenMemberError):
-        s.type_of(use)
+    for use in (
+        "G::Inner(y = 1)",
+        "fn(x: G::Inner) => 1",
+        "G::Inner::Deep(z = 1)",
+        "G::f()",
+        "G::b",
+    ):
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
 
 
 def test_a_bare_query_for_a_hidden_member_through_a_scoped_alias_matches_type_ofs_class(
@@ -2696,14 +2697,9 @@ def test_a_bare_query_for_a_hidden_applied_generic_variant_matches_type_ofs_clas
         s.type_of("fn(x: E[int]::A) => 1")
 
 
-@pytest.mark.parametrize(
-    "use",
-    ("D::Red", "case c of\n  | D::Red => 1\n  | _ => 2", "c is D::Red", "fn(x: D::Red) => 1"),
-    ids=("value", "pattern", "is", "type"),
-)
 @pytest.mark.parametrize("sizes", _grouping_params_for(4))
 def test_alias_chain_reaches_a_lifted_import_at_every_link(
-    tmp_path: Path, sizes: tuple[int, ...], use: str
+    tmp_path: Path, sizes: tuple[int, ...]
 ) -> None:
     """A chain of aliases must reach a member a later import lifts back in,
     at every link of the chain and at every position, regardless of how the
@@ -2720,7 +2716,13 @@ def test_alias_chain_reaches_a_lifted_import_at_every_link(
     for owner in ("K", "C", "D"):
         assert s.eval_entry(f"{owner}::Red").ok
 
-    s.type_of(use)
+    for use in (
+        "D::Red",
+        "case c of\n  | D::Red => 1\n  | _ => 2",
+        "c is D::Red",
+        "fn(x: D::Red) => 1",
+    ):
+        s.type_of(use)
 
 
 def test_alias_of_a_generic_alias_chain_reaches_a_member() -> None:
@@ -2767,22 +2769,10 @@ _TWO_LINK_ALIAS_CHAIN_NARROWED_GROUPINGS = frozenset(
 
 
 @pytest.mark.parametrize(
-    "use",
-    (
-        "C::A",
-        "case (C::A) of\n  | C::A => 1\n  | _ => 2",
-        "(C::A) is C::A",
-        "fn(x: C::A) => 1",
-    ),
-    ids=("value", "pattern", "is", "type"),
-)
-@pytest.mark.parametrize(
     "sizes",
     _setup_groupings(_TWO_LINK_ALIAS_CHAIN_NARROWED_GROUPINGS),
 )
-def test_a_two_link_alias_chain_narrows_with_a_later_local_use(
-    use: str, sizes: tuple[int, ...]
-) -> None:
+def test_a_two_link_alias_chain_narrows_with_a_later_local_use(sizes: tuple[int, ...]) -> None:
     """A local ``use ... hiding`` that narrows an earlier glob ``use`` must
     reach through a two-link alias chain (``C`` of ``K`` of ``E``), not only
     a single alias, regardless of how the declarations are split into
@@ -2794,8 +2784,14 @@ def test_a_two_link_alias_chain_narrows_with_a_later_local_use(
     assert s.eval_entry("C::B").ok
     with pytest.raises(HiddenMemberError):
         s.type_of("K::A")
-    with pytest.raises(HiddenMemberError):
-        s.type_of(use)
+    for use in (
+        "C::A",
+        "case (C::A) of\n  | C::A => 1\n  | _ => 2",
+        "(C::A) is C::A",
+        "fn(x: C::A) => 1",
+    ):
+        with pytest.raises(HiddenMemberError):
+            s.type_of(use)
 
 
 def test_alias_freezes_a_member_hidden_by_an_ambiguous_later_import(tmp_path: Path) -> None:
@@ -3016,19 +3012,9 @@ _USE_OPENED_SCOPE_REDECLARED_PROBE = "let d: C = C::A"
 _USE_OPENED_SCOPE_REDECLARED_GROUPINGS = frozenset({(1, 1, 1, 1), (1, 2, 1)})
 
 
-@pytest.mark.parametrize(
-    ("works", "fails"),
-    (
-        ("C::A", "C::X"),
-        ("case d of\n  | C::A => 1\n  | _ => 2", "case d of\n  | C::X => 1\n  | _ => 2"),
-        ("d is C::A", "d is C::X"),
-        ("fn(x: C::A) => 1", "fn(x: C::X) => 1"),
-    ),
-    ids=("value", "pattern", "is", "type"),
-)
 @pytest.mark.parametrize("sizes", _setup_groupings(_USE_OPENED_SCOPE_REDECLARED_GROUPINGS))
 def test_alias_of_a_use_opened_scope_survives_the_scope_being_redeclared(
-    sizes: tuple[int, ...], works: str, fails: str
+    sizes: tuple[int, ...],
 ) -> None:
     """An alias declared through a use-opened scope keeps naming its own
     declaration once that scope is redeclared with different members, in
@@ -3039,10 +3025,16 @@ def test_alias_of_a_use_opened_scope_survives_the_scope_being_redeclared(
     s = ReplSession()
     _eval_grouped(s, _USE_OPENED_SCOPE_REDECLARED_DECLS, sizes)
     assert s.eval_entry(_USE_OPENED_SCOPE_REDECLARED_PROBE).ok
-    s.type_of(works)
-    with pytest.raises(AglError) as excinfo:
-        s.type_of(fails)
-    assert not isinstance(excinfo.value, HiddenMemberError)
+    for works, fails in (
+        ("C::A", "C::X"),
+        ("case d of\n  | C::A => 1\n  | _ => 2", "case d of\n  | C::X => 1\n  | _ => 2"),
+        ("d is C::A", "d is C::X"),
+        ("fn(x: C::A) => 1", "fn(x: C::X) => 1"),
+    ):
+        s.type_of(works)
+        with pytest.raises(AglError) as excinfo:
+            s.type_of(fails)
+        assert not isinstance(excinfo.value, HiddenMemberError)
 
 
 @pytest.mark.parametrize(

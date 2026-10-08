@@ -6,8 +6,8 @@ or a module qualifier. A record or exception constructor of the same name
 claims the spelling over the member, and a removed enum or member injects
 nothing.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`).
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -685,7 +685,7 @@ class TestInjection:
     """Every contribution that reaches an enum injects its members bare."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_INJECTING))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
     @pytest.mark.parametrize("scenario", scenario_params(_MEMBER_KINDS))

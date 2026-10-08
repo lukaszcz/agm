@@ -9,9 +9,8 @@ never makes it a member. An owner two routes, two wildcard imports or two
 ``use`` declarations supply is probed here only in the positions
 :mod:`tests.test_agl_qualifier_position_matrix` leaves out.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -78,6 +77,7 @@ _SCENARIOS = {
         },
     ),
     "referenced-member-of-local-enum": Scenario(
+        stdlib=True,
         header=(
             "record Saved\n  id: int",
             "enum Stored = ::Saved | Fresh",
@@ -372,5 +372,5 @@ class TestAmbiguousMemberSelection:
     """Full-path selection among imports, uses, routes and local declarations."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

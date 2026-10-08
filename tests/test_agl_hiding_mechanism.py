@@ -6,8 +6,8 @@ verdict: the removed spelling is a hidden-member error when nothing else
 supplies it, a bare spelling is simply unknown, and a miss that removed nothing
 the spelling would reach is not hidden.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`).
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -542,7 +542,7 @@ class TestHidingMechanism:
     """Hidden verdicts and selection across every contribution kind."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
     @pytest.mark.parametrize("scenario", scenario_params(_ALIAS_READS_HIDING))

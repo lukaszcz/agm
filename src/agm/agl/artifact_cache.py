@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from agm.agl.lower.module import LoweredModule
     from agm.agl.matchcompile import CachedModuleSites
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
-    from agm.agl.scope.program import ResolvedModule
+    from agm.agl.scope.program import ResolvedModule, _ModuleExports, _ModuleTables
     from agm.agl.typecheck.env import CheckedModule, CheckedModuleImage, EnvironmentFacts
 
 # One entry per module per distinct set of sources a process compiles against.
@@ -120,6 +120,8 @@ def _same_sources(retained: Sources, current: Sources) -> bool:
 RetainedSources = Mapping["ModuleId", Sources]
 
 
+_DECLARATIONS: _ArtifactStore["_ModuleTables"] = _ArtifactStore(persist=False)
+_EXPORTS: _ArtifactStore["_ModuleExports"] = _ArtifactStore(persist=False)
 _RESOLVED: _ArtifactStore["ResolvedModule"] = _ArtifactStore(kind="scope")
 # Holds full CheckedModule objects for in-process reuse; a disk-served entry
 # is a data-only CheckedModuleImage until check_program rehydrates and retains
@@ -161,6 +163,30 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
         for module_id, loaded in graph.modules.items()
         if loaded.path is not None and module_id != graph.entry_id
     }
+
+
+def retained_module_declarations(module: LoadedModule) -> _ModuleTables | None:
+    """Reuse immutable declaration metadata for the same loaded module."""
+    return _DECLARATIONS.get((module.module_id,), (module,))
+
+
+def retain_module_declarations(module: LoadedModule, tables: _ModuleTables) -> None:
+    """Keep syntax-derived declaration metadata in memory only."""
+    _DECLARATIONS.put((module.module_id,), (module,), tables)
+
+
+def retained_module_exports(retainable: RetainedSources) -> dict[ModuleId, _ModuleExports]:
+    """Reuse settled export surfaces against their complete source dependencies."""
+    from agm.agl.scope.program import _ModuleExports
+
+    return _served(_EXPORTS, retainable, (), _ModuleExports)
+
+
+def retain_module_exports(
+    retainable: RetainedSources, exports: Mapping[ModuleId, _ModuleExports]
+) -> None:
+    """Keep settled export surfaces, including withholding, in memory only."""
+    _retain(_EXPORTS, retainable, (), exports)
 
 
 def retained_resolved_modules(retainable: RetainedSources) -> dict[ModuleId, ResolvedModule]:
@@ -439,6 +465,8 @@ def clear_retained_artifacts() -> None:
     replaced file is reparsed and its artifacts then fail their own identity
     condition.
     """
+    _DECLARATIONS.clear()
+    _EXPORTS.clear()
     _RESOLVED.clear()
     _CHECKED.clear()
     _HEADERS.clear()

@@ -5,7 +5,8 @@ type position there -- a member reached through another alias's owner, or a
 scope region a ``use`` opens in the alias's own region, included -- so every
 position the alias is used in (annotation, constructor, owner-qualified
 constructor, pattern, ``is``) agrees with spelling the target directly, in
-the file part and every REPL grouping (see :mod:`tests.agl.qualifier_support`).
+inline and across representative file/REPL entry boundaries
+(see :mod:`tests.agl.qualifier_support`).
 The alias qualifies every member of its target, whatever other import also
 spells that member's full path.
 """
@@ -781,7 +782,7 @@ class TestPathBeneathAnAliasIsReadThroughItsTarget:
     """
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
     @pytest.mark.parametrize(

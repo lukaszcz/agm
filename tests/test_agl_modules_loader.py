@@ -24,6 +24,7 @@ from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
+from agm.core import fs
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots, agl_std_package_roots
@@ -584,6 +585,45 @@ class TestNodeIdDisjointness:
 
 
 class TestCanonicalDedup:
+    @pytest.mark.parametrize("wildcard", [False, True], ids=["direct", "wildcard"])
+    def test_shared_dependencies_are_discovered_once_per_graph(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wildcard: bool
+    ) -> None:
+        root = tmp_path / "root"
+        other = tmp_path / "other"
+        other.mkdir()
+        shared = _write_module(root, "shared/leaf")
+        dependency = "import shared/*" if wildcard else "import shared/leaf"
+        _write_module(root, "a", dependency)
+        _write_module(root, "b", dependency)
+        roots = _roots(root, other)
+        probes = 0
+        original_exists = fs.exists
+        original_rglob = fs.rglob
+
+        def exists(path: Path) -> bool:
+            nonlocal probes
+            if not wildcard and path == shared:
+                probes += 1
+            return original_exists(path)
+
+        def rglob(path: Path, pattern: str) -> list[Path]:
+            nonlocal probes
+            if wildcard and path == shared.parent:
+                probes += 1
+            return original_rglob(path, pattern)
+
+        monkeypatch.setattr(fs, "exists", exists)
+        monkeypatch.setattr(fs, "rglob", rglob)
+        graph = load_graph("import a\nimport b", entry_path=None, roots=roots, default_stdlib=False)
+        assert ModuleId.from_path("shared/leaf") in graph.modules
+        assert probes == 1
+
+        # A new graph must rediscover changes, including new ambiguity.
+        _write_module(other, "shared/leaf")
+        with pytest.raises(AmbiguousModule):
+            load_graph("import a\nimport b", entry_path=None, roots=roots, default_stdlib=False)
+
     def test_same_file_via_symlinked_roots_counts_once(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()

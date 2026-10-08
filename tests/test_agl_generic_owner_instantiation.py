@@ -8,9 +8,8 @@ not one of its inline members (a declaration nested beneath it) are rejected
 on the applied segment where the name is looked up. A
 qualified generic type names the same declaration in every type position.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -56,6 +55,7 @@ _LIB = (
 
 _SCENARIOS = {
     "generic-record-with-nested-record": Scenario(
+        stdlib=True,
         header=("record Box[T]\n  v: T\nrecord Box::Inner\n  x: int",),
         probes={
             "rec-pat": rejected(
@@ -83,6 +83,7 @@ _SCENARIOS = {
         },
     ),
     "routed-generic-aliases": Scenario(
+        stdlib=True,
         modules={"gm": _GM},
         header=("import gm",),
         probes={
@@ -109,6 +110,7 @@ _SCENARIOS = {
         },
     ),
     "wildcard-generic-aliases": Scenario(
+        stdlib=True,
         modules={"gm": _GM},
         header=("import gm::*",),
         probes={
@@ -191,6 +193,7 @@ _SCENARIOS = {
         },
     ),
     "row-alias": Scenario(
+        stdlib=True,
         header=(
             (
                 "enum Slot[T]\n"
@@ -292,6 +295,7 @@ _SCENARIOS = {
         },
     ),
     "flipped-alias": Scenario(
+        stdlib=True,
         header=(
             (
                 "enum Slot[T]\n"
@@ -472,6 +476,7 @@ _SCENARIOS = {
         },
     ),
     "qualified-types-in-every-type-position": Scenario(
+        stdlib=True,
         modules={"lib": _LIB},
         header=("import lib",),
         probes=nonconstant_in_file(
@@ -629,5 +634,5 @@ class TestGenericOwnerInstantiation:
     """Instantiation through applied owners and aliases, in every type position."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

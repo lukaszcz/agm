@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,7 +20,10 @@ from agm.agl.modules.parsed_module_cache import (
 )
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
-from tests._agl_helpers import all_node_ids, prepare_inline_code, run_inline_code
+from agm.agl.scope import program as scope_program
+from agm.agl.scope.imports import NameAtom, PathAtom, QName, ScopeOrigins
+from agm.agl.syntax.nodes import ExportDecl, Program
+from tests._agl_helpers import agl_roots, all_node_ids, prepare_inline_code, run_inline_code
 from tests.agl.module_graph import load_graph
 
 _LIB_ID = ModuleId.from_path("lib/a")
@@ -79,6 +82,84 @@ def _library_parse_count(labels: list[str], path: Path) -> int:
 # ---------------------------------------------------------------------------
 # Loader integration
 # ---------------------------------------------------------------------------
+
+
+def test_unchanged_library_declarations_are_collected_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_module(tmp_path, "lib/a", _LIB_SOURCE)
+    collections = 0
+    original = scope_program._compute_local_exports
+
+    def counted(mid: ModuleId, program: Program) -> dict[NameAtom, QName]:
+        nonlocal collections
+        if mid == _LIB_ID:
+            collections += 1
+        return original(mid, program)
+
+    monkeypatch.setattr(scope_program, "_compute_local_exports", counted)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    for n in (0, 1):
+        result = run_inline_code(
+            runtime,
+            f"import lib/a\nprint(lib/a::f() + {n})",
+            roots=agl_roots(tmp_path),
+        )
+        assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "1\n2\n"
+    assert collections == 1
+
+
+def test_unchanged_library_exports_settle_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_module(tmp_path, "lib/a", _LIB_SOURCE)
+    _write_module(tmp_path, "lib/facade", "import lib/a\nexport lib/a::{f}\n")
+    collections = 0
+    original = scope_program._compute_reexport_additions
+
+    def counted(
+        decl: ExportDecl,
+        target_exports: Mapping[NameAtom, QName],
+        target_scopes: Mapping[NameAtom, ScopeOrigins],
+        target_withheld: Mapping[NameAtom, frozenset[QName]],
+        through: Callable[[PathAtom], Mapping[PathAtom, QName]],
+        denotations: scope_program.Denotations,
+        *,
+        allow_missing: bool = False,
+    ) -> scope_program._Additions:
+        nonlocal collections
+        if decl.module_path == ("lib", "a"):
+            collections += 1
+        return original(
+            decl,
+            target_exports,
+            target_scopes,
+            target_withheld,
+            through,
+            denotations,
+            allow_missing=allow_missing,
+        )
+
+    monkeypatch.setattr(scope_program, "_compute_reexport_additions", counted)
+    runtime = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None)
+    cold_checks = 0
+    for n in (0, 1):
+        result = run_inline_code(
+            runtime,
+            f"import lib/facade\nprint(lib/facade::f() + {n})",
+            roots=agl_roots(tmp_path),
+        )
+        assert result.ok, result.diagnostics
+        if n == 0:
+            cold_checks = collections
+    assert capsys.readouterr().out == "1\n2\n"
+    assert cold_checks > 0
+    assert collections == cold_checks
 
 
 def test_standard_library_module_is_parsed_once_across_compilations(

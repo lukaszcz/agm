@@ -544,6 +544,8 @@ def _load_into_graph(
     # and therefore the start_id seed assignments — are stable regardless of
     # dict/set ordering.
     queue: deque[_ResolvedDependency] = deque()
+    # Successful lookups are stable within this load, never across graph builds.
+    dependency_paths: dict[tuple[tuple[str, ...], bool], dict[ModuleId, Path]] = {}
 
     def _resolve_dependencies(
         source: ModuleId,
@@ -555,11 +557,15 @@ def _load_into_graph(
         new_pairs: list[_ResolvedDependency] = []
         source_path = modules[source].path
         for decl in decls:
-            if decl.wildcard:
-                targets_by_id = expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
-            else:
-                target_id = ModuleId(segments=tuple(decl.module_path))
-                targets_by_id = {target_id: resolve_module(target_id, roots, span=decl.span)}
+            key = (tuple(decl.module_path), decl.wildcard)
+            targets_by_id = dependency_paths.get(key)
+            if targets_by_id is None:
+                if decl.wildcard:
+                    targets_by_id = expand_wildcard(key[0], roots, span=decl.span)
+                else:
+                    target_id = ModuleId(segments=key[0])
+                    targets_by_id = {target_id: resolve_module(target_id, roots, span=decl.span)}
+                dependency_paths[key] = targets_by_id
             for mid, target_path in targets_by_id.items():
                 _check_package_import_visibility(
                     source_path, target_path, mid, roots=roots, span=decl.span

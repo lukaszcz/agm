@@ -1242,7 +1242,7 @@ def _prepare_program(
         resolved,
         type_table=shared_type_table,
         entry_seed_env=entry_seed_env,
-        cached_modules=cached_checked_modules if entry_seed_env is None else None,
+        cached_modules=cached_checked_modules,
     )
     # Grouped once here, for both the signature pre-pass and every module
     # environment below.
@@ -1488,11 +1488,10 @@ def check_program(
         capabilities,
         entry_seed_env=entry_seed_env,
         cached_checked_modules=cached_checked_modules,
-        # A REPL compilation seeds the shared type table from its session
-        # environment, so its modules' headers are not a function of the
-        # loaded modules alone -- the same condition that keeps its checked
-        # modules out of the artifact cache below.
-        retainable=retainable if entry_seed_env is None else None,
+        # Imported headers cannot read the anonymous REPL entry's session
+        # declarations. Replay their own facts onto this compilation's table;
+        # the entry itself remains fresh and is never retainable.
+        retainable=retainable,
         session_builtin_declarations=session_builtin_declarations,
     )
     module_envs = prepared.module_envs

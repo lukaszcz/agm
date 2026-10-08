@@ -163,6 +163,8 @@ def owning_package(path: Path, packages: tuple[PackageInfo, ...]) -> PackageInfo
     the module-loader policy seam, so only files under a module tree qualify.
     """
 
+    if not packages:
+        return None
     canonical_path = path.resolve()
     for package in sorted(packages, key=_module_root_length, reverse=True):
         try:

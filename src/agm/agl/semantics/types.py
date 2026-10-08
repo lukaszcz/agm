@@ -49,9 +49,11 @@ the type's kind in the ``HostCapabilities.codec_kinds`` maps.  E.g.
 from __future__ import annotations
 
 import enum as _enum
+from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from itertools import count
+from threading import Lock
 from typing import TypeGuard, assert_never, overload
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
@@ -882,9 +884,24 @@ def contains_type_var(t: Type) -> bool:
     return any(isinstance(node, TypeVarType) for node in iter_type(t))
 
 
+_INFERENCE_VARIABLE_CACHE: OrderedDict[int, tuple[Type, bool]] = OrderedDict()
+_INFERENCE_VARIABLE_CACHE_LOCK = Lock()
+
+
 def contains_inference_var(t: Type) -> bool:
-    """Return whether *t* contains a solver-owned flexible variable."""
-    return any(isinstance(node, InferenceVarType) for node in iter_type(t))
+    """Reuse bounded scans of immutable types for solver-owned flexible variables."""
+    key = id(t)
+    with _INFERENCE_VARIABLE_CACHE_LOCK:
+        cached = _INFERENCE_VARIABLE_CACHE.get(key)
+        if cached is not None:
+            _INFERENCE_VARIABLE_CACHE.move_to_end(key)
+            return cached[1]
+        result = any(isinstance(node, InferenceVarType) for node in iter_type(t))
+        # Retaining the handle prevents identity reuse while its result is cached.
+        _INFERENCE_VARIABLE_CACHE[key] = (t, result)
+        if len(_INFERENCE_VARIABLE_CACHE) > 8192:
+            _INFERENCE_VARIABLE_CACHE.popitem(last=False)
+        return result
 
 
 # ---------------------------------------------------------------------------

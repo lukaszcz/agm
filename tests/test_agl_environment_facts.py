@@ -28,6 +28,7 @@ from agm.agl.semantics.types import (
     IntType,
     RecordType,
     TextType,
+    Type,
     TypeTemplate,
 )
 from agm.agl.syntax.types import IntT, NameT
@@ -48,6 +49,30 @@ from tests.agl.module_graph import check_resolved, resolve_inline_entry
 # ---------------------------------------------------------------------------
 # Fact scenarios: one per journaled mutator, record + query
 # ---------------------------------------------------------------------------
+
+
+def test_persistent_environment_checks_each_type_identity_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = IntType()
+    second = IntType()
+    env = TypeEnvironment()
+    env.register_type("First", first)
+    env.register_type("Second", second)
+    env.set_binding_type(1, first)
+    env.register_function_signature("helper", FunctionSignature(params=(), result=second))
+    scans: list[Type] = []
+    original = env_module.contains_inference_var
+
+    def scan(typ: Type) -> bool:
+        scans.append(typ)
+        return original(typ)
+
+    monkeypatch.setattr(env_module, "contains_inference_var", scan)
+    env.assert_closed()
+    assert sum(typ is first for typ in scans) == 1
+    assert sum(typ is second for typ in scans) == 1
+
 
 _HELPER_SIG = FunctionSignature(params=(), result=IntType())
 _SCOPED_ENUM_TYPE = EnumType(name="Color")

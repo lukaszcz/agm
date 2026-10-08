@@ -7,9 +7,8 @@ same-named imported type or scope, whose members stay reachable beside it.
 A renaming alias's method is its target's; receivers a scalar cannot own
 are rejected.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -49,6 +48,7 @@ _SHAPES_2 = "scope Geo\n\n  scope In\n    record Point\n      x: int\n  end In\n
 
 _SCENARIOS = {
     "method-on-imported-record": Scenario(
+        stdlib=True,
         modules={"tl": _TL},
         header=(
             "import tl::*",
@@ -67,6 +67,7 @@ _SCENARIOS = {
         },
     ),
     "method-on-imported-enum": Scenario(
+        stdlib=True,
         modules={"en": _EN},
         header=(
             "import en::*",
@@ -250,6 +251,7 @@ _SCENARIOS = {
         },
     ),
     "method-on-used-enum": Scenario(
+        stdlib=True,
         modules={"en": _EN},
         header=(
             "import en",
@@ -286,6 +288,7 @@ _SCENARIOS = {
         },
     ),
     "generic-method-on-prelude-enum": Scenario(
+        stdlib=True,
         header=("def Option::m[T](self) -> int = 1",),
         probes={
             "opt-some-val": accepted(
@@ -313,6 +316,7 @@ _SCENARIOS = {
         },
     ),
     "non-generic-method-on-generic-prelude-enum": Scenario(
+        stdlib=True,
         header=("def Option::m(self) -> int = 1",),
         probes={
             "opt2-annot": rejected(
@@ -476,6 +480,7 @@ _SCENARIOS = {
         },
     ),
     "imported-enum-without-method": Scenario(
+        stdlib=True,
         modules={"en": _EN},
         header=("import en::*",),
         probes={
@@ -496,6 +501,7 @@ _SCENARIOS = {
         },
     ),
     "method-on-local-enum": Scenario(
+        stdlib=True,
         modules={"en": _EN},
         header=(
             "enum Shape\n  | Circle\n  | Square",
@@ -576,6 +582,7 @@ _SCENARIOS = {
         },
     ),
     "function-in-imported-scope-namespace": Scenario(
+        stdlib=True,
         modules={"shapes": _SHAPES_2},
         header=(
             "import shapes::*",
@@ -648,7 +655,7 @@ class TestDefCreatedNamespaces:
     """Owners' members through a method path; function paths beside imported types and scopes."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
 

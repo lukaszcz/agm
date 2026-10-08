@@ -4,8 +4,8 @@ Each qualifier is probed in the value, pattern, ``is`` and cast positions
 that take constructors, and in every type position (annotation, alias
 target, type argument, cast target, applied type) through the shared
 :func:`~tests.agl.qualifier_support.type_positions` templates, in the file part
-and in every legal REPL grouping of its scenario's header (see
-:mod:`tests.agl.qualifier_support`). An accepted probe's identity renders
+and across every REPL entry-boundary split and the fully incremental history
+(see :mod:`tests.agl.qualifier_support`). An accepted probe's identity renders
 the declaration it selected: a type position's probe returns its own
 parameter, so a wrong selection of the same kind renders another type.
 
@@ -646,8 +646,10 @@ _SCENARIOS: dict[str, Scenario] = {
 
 
 class TestQualifierPositionMatrix:
-    """Each qualifier's decision is the same in every position, mode and REPL grouping."""
+    """Each qualifier's decision is the same in every position, mode and entry-boundary split."""
 
-    @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    @pytest.mark.parametrize(
+        "scenario", scenario_params(_SCENARIOS, cross_product=True, stdlib=True)
+    )
+    def test_file_and_repl_entry_boundaries_agree(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

@@ -10,8 +10,8 @@ the alias reaches beneath its target, the own one winning, and the target's
 spelling never reads it. A method receiver selected through any alias is an
 error. Reading through an alias stays transparent.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`).
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -201,6 +201,7 @@ def _beneath_imported_probes() -> dict[str, Probe]:
 
 _SCENARIOS |= {
     f"declared-beneath-an-imported-alias-{name}": Scenario(
+        stdlib=True,
         modules=_MODULES,
         header=(*header, _OWN),
         probes=_beneath_imported_probes(),
@@ -1090,10 +1091,10 @@ _SCENARIOS |= (
 
 
 class TestDeclarationsThroughAliases:
-    """Declarations beneath alias names, the file part and every REPL grouping."""
+    """Declarations beneath alias names, with cross-mode entry-boundary coverage."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
 

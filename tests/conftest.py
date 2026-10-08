@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import inspect
 import os
 import shutil
@@ -36,6 +37,9 @@ from tests._package_helpers import PythonInstaller
 # Registering the module with ``-p`` instead would break every invocation that
 # does not put the repository root on ``sys.path`` (plain ``uv run pytest``).
 __all__ = ["pytest_runtest_protocol", "pytest_sessionfinish", "pytest_testnodedown"]
+
+_GC_THRESHOLDS = pytest.StashKey[tuple[int, int, int]]()
+_GC_TESTS = pytest.StashKey[int]()
 
 # Enable the optional invariant self-checks — match-compilation self-checks, IR
 # structural validation, and completion's re-raising of the failures it would
@@ -87,10 +91,43 @@ def pytest_configure(config: pytest.Config) -> None:
     hooks) cannot express twice under one name.
     """
     config.pluginmanager.register(_command_coverage, "agm_command_coverage")
+    # Collect cyclic compiler state at bounded test boundaries, not during allocations.
+    thresholds = gc.get_threshold()
+    config.stash[_GC_THRESHOLDS] = thresholds
+    config.stash[_GC_TESTS] = 0
+    gc.set_threshold(0)
+    config.add_cleanup(lambda: gc.set_threshold(*thresholds))
     is_xdist_worker = hasattr(config, "workerinput")
     xdist_active = getattr(config.option, "dist", "no") != "no"
     if is_xdist_worker or not xdist_active:
         _detach_from_controlling_terminal()
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    count = item.config.stash[_GC_TESTS] + 1
+    if count == 200:
+        gc.collect()
+        count = 0
+    item.config.stash[_GC_TESTS] = count
+
+
+@pytest.fixture(scope="session", autouse=True)
+def compiler_gc_policy(pytestconfig: pytest.Config) -> Generator[None, None, None]:
+    """Avoid repeatedly scanning collection metadata during compiler-heavy tests."""
+    gc.collect()
+    gc.freeze()
+    try:
+        yield
+    finally:
+        from agm.agl.artifact_cache import clear_retained_artifacts
+        from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
+        from agm.agl.repl import session as repl_session_module
+
+        clear_retained_artifacts()
+        clear_parsed_module_cache()
+        repl_session_module._bootstrap_cache.clear()
+        gc.unfreeze()
+        gc.set_threshold(*pytestconfig.stash[_GC_THRESHOLDS])
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -101,6 +138,21 @@ def isolated_compiler_cache(
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("compiler-cache")))
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def shared_qualifier_modules(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[None, None, None]:
+    """Reuse immutable qualifier libraries while keeping every REPL session fresh."""
+    from tests.agl import qualifier_support
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            qualifier_support, "_MODULES_ROOT", tmp_path_factory.mktemp("qualifier-modules")
+        )
+        yield
+    qualifier_support._MODULE_ROOTS.clear()
 
 
 @pytest.fixture()

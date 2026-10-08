@@ -1,6 +1,6 @@
 # AgL Type System and Checking
 
-The semantic type model lives in `semantics/` and is consumed by `typecheck/`. Besides scalars, containers, records, enums, and exceptions it carries a unit type for side-effecting expressions, function types, a bottom type for divergence, and rigid type variables for generics. Solver inference variables are structurally distinct from source variables and never escape checked output.
+The semantic type model lives in `semantics/` and is consumed by `typecheck/`. Besides scalars, containers, records, enums, and exceptions it carries a unit type for side-effecting expressions, function types, a bottom type for divergence, and rigid type variables for generics. Solver inference variables are structurally distinct from source variables and never escape checked output. Closure scans reuse bounded results over immutable types (`semantics/types.py`).
 
 ## Nominal Types Are Handles
 

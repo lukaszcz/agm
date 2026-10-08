@@ -15,8 +15,8 @@ module, so the declaration comes with or after its definition.
 module's own fixity declarations first in any order: a builtin operator, an
 own operator or an imported one gives its fixity as the base.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`).
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -323,7 +323,7 @@ _SCENARIOS: dict[str, Scenario] = {
 
 class TestOperatorNames:
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
 

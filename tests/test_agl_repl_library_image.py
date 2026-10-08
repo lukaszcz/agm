@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.capabilities import HostCapabilities
+from agm.agl.modules.ids import ModuleId
 from agm.agl.repl import ReplSession
+from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.values import IntValue, TextValue
+from agm.agl.typecheck import program as typecheck_program
+from agm.agl.typecheck.env import TypeEnvironment
 
 
 def _open_session(root: Path | None = None) -> ReplSession:
@@ -44,6 +49,36 @@ def test_reset_discards_bindings_and_accepts_fresh_definitions() -> None:
 
 
 class TestImportedModules:
+    def test_later_entries_reuse_library_headers_despite_session_redeclarations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "tools.agl").write_text(
+            "record Box[T]\n  value: T\ndef box(n: int) -> Box[int] = Box(value = n)\n"
+        )
+        preparations = 0
+        original = typecheck_program.prepare_module_headers
+
+        def counted(
+            resolved: ModuleResolution,
+            capabilities: HostCapabilities,
+            *,
+            env: TypeEnvironment,
+            module_id: ModuleId,
+        ) -> None:
+            nonlocal preparations
+            if module_id == ModuleId(("tools",)):
+                preparations += 1
+            original(resolved, capabilities, env=env, module_id=module_id)
+
+        monkeypatch.setattr(typecheck_program, "prepare_module_headers", counted)
+        session = _open_session(tmp_path)
+        assert session.eval_entry("import tools\ntools::box(1).value").value == IntValue(1)
+        for n in (2, 3):
+            result = session.eval_entry(f"record Box\n  other: text\ntools::box({n}).value")
+            assert result.ok, result.diagnostics
+            assert result.value == IntValue(n)
+        assert preparations == 1
+
     def test_a_newly_imported_module_is_resolved_and_used(self, tmp_path: Path) -> None:
         (tmp_path / "later.agl").write_text("def twice(n: int) -> int = n * 2\n")
         session = _open_session(tmp_path)

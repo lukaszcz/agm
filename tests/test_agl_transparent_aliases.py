@@ -12,8 +12,8 @@ a path through an alias: it names the target's declaration there, and a
 path naming none is an error. An alias whose target resolves to nothing is
 an error where it is declared.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`).
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -127,6 +127,7 @@ def _hidden_probes(spelling: str) -> dict[str, Probe]:
 
 _SCENARIOS = {
     "an-alias-named-like-its-target-is-that-declaration": Scenario(
+        stdlib=True,
         modules={"base": _BASE, "al": _RENAMING},
         header=("import base::*", "import al::*"),
         probes={
@@ -137,16 +138,19 @@ _SCENARIOS = {
         },
     ),
     "an-alias-chain-and-its-target-are-one-declaration": Scenario(
+        stdlib=True,
         modules={"base": _BASE, "al": _RENAMING, "twin": "import base::*\ntype Geo = Base\n"},
         header=("import al::*", "import twin::*"),
         probes=_one_declaration_probes("Geo", "al::Geo"),
     ),
     "two-aliases-of-one-target-are-one-declaration": Scenario(
+        stdlib=True,
         modules={"base": _BASE, "al": _EXPORTING, "twin": _TWIN},
         header=("import al::*", "import twin::*"),
         probes=_one_declaration_probes("Geo", "al::Geo"),
     ),
     "a-re-exported-alias-and-its-target-are-one-declaration": Scenario(
+        stdlib=True,
         modules={**_MODULES, "re": _REEXPORTING},
         header=("import re::*", "import base::*"),
         probes={
@@ -240,6 +244,7 @@ _SCENARIOS = {
         },
     ),
     "an-import-tail-names-a-path-through-an-alias": Scenario(
+        stdlib=True,
         modules=_MODULES,
         header=("import al::{Geo::Inner as I, Hue::Red, Geo::Shape}",),
         probes={
@@ -342,6 +347,7 @@ _SCENARIOS = {
         },
     ),
     "an-export-item-names-a-path-through-an-alias": Scenario(
+        stdlib=True,
         modules={**_MODULES, "ex": _EXPORTING_THROUGH},
         header=("import ex::*",),
         probes={
@@ -432,6 +438,7 @@ _SCENARIOS = {
         )
     },
     "a-cycle-reads-its-final-exports-through-aliases": Scenario(
+        stdlib=True,
         modules={"base": _BASE, "al": _CYCLING, "ex": _CYCLED},
         header=(f"{_ROUTES}\nimport al",),
         probes={
@@ -514,6 +521,7 @@ _HUE = "enum Color\n  | Red\n  | Blue\n"
 _HUE_RED = "record hue::Color::Red"
 
 _SCENARIOS["an-own-alias-wins-the-paths-beneath-it-over-an-import"] = Scenario(
+    stdlib=True,
     modules={**_MODULES, "hue": _HUE},
     header=("import base::*", "import hue", "type Color = hue::Color"),
     probes={
@@ -613,6 +621,7 @@ def _beneath_hidden_alias_probes(route: str) -> dict[str, Probe]:
 
 _SCENARIOS |= {
     "hiding-an-alias-removes-the-paths-it-reaches": Scenario(
+        stdlib=True,
         modules={"base": _BASE, "ad": _DECLARING_BENEATH},
         header=("import ad::* hiding Geo, T2\nimport ad hiding Geo, T2",),
         probes=_beneath_hidden_alias_probes("ad"),
@@ -629,6 +638,7 @@ _SCENARIOS |= {
         },
     ),
     "an-export-hiding-an-alias-removes-the-paths-it-reaches": Scenario(
+        stdlib=True,
         modules={
             "base": _BASE,
             "ad": _DECLARING_BENEATH,
@@ -671,6 +681,7 @@ def _hidden_reach_probes(route: str, hidden: Collection[str]) -> dict[str, Probe
 
 _SCENARIOS |= {
     f"{name}-{'-'.join(hidden).lower()}-removes-what-its-site-reaches-beneath-the-target": Scenario(
+        stdlib=True,
         modules={
             "base": _BASE,
             "hid": _REACHING,
@@ -720,6 +731,7 @@ def _use_hidden_reach_probes(region: str, hidden: Collection[str]) -> dict[str, 
 
 _SCENARIOS |= {
     f"a-use-hiding-{'-'.join(hidden).lower()}-removes-what-its-site-reaches": Scenario(
+        stdlib=True,
         modules={"base": _BASE, "hid": _REACHING},
         header=(f"import hid\nuse hid::* hiding {', '.join(hidden)}",),
         probes=_use_hidden_reach_probes("{call}", hidden),
@@ -728,6 +740,7 @@ _SCENARIOS |= {
 } | {
     f"a-use-in-a-region-hiding-{'-'.join(hidden).lower()}-removes-what-its-site-reaches": (
         Scenario(
+            stdlib=True,
             modules={"base": _BASE, "hid": _REACHING},
             header=("import hid",),
             probes=_use_hidden_reach_probes(
@@ -1043,6 +1056,7 @@ def _referenced_at_its_enum_path_probes(box: str) -> dict[str, Probe]:
 
 _SCENARIOS |= {
     f"an-alias-reaches-a-referenced-member-at-its-enum-path-{name}": Scenario(
+        stdlib=True,
         modules={"box": f"{_REFERENCING}\ntype B = Box\n"},
         header=header,
         probes=_referenced_at_its_enum_path_probes(box),
@@ -1409,6 +1423,7 @@ _SCENARIOS["an-alias-standing-for-its-parameter-applied-denotes-its-argument"] =
 
 _SCENARIOS |= {
     name: Scenario(
+        stdlib=True,
         modules={
             "base": _BASE,
             "pj": f"import base::*\nexport base::{{Base}}\ntype Id[T] = {stands}\n"
@@ -1495,6 +1510,7 @@ _DENOTING_B = (
 parameters renamed), ``Pair``, ``Bx`` and ``R`` distinct ones."""
 
 _SCENARIOS["aliases-denoting-one-type-are-one-declaration"] = Scenario(
+    stdlib=True,
     modules={"gen": _GENERIC, "a": _DENOTING_A, "b": _DENOTING_B},
     header=("import gen::*", "import a::*", "import b::*"),
     probes={
@@ -1692,6 +1708,7 @@ def _builtin_alias_probes(text: str, array: str, applied: str) -> dict[str, Prob
 
 
 _SCENARIOS["an-alias-of-a-builtin-type-reads-paths-as-its-target"] = Scenario(
+    stdlib=True,
     modules={"bi": _BUILTIN_TARGETS, "tx": _TEXT_SCOPE, "bj": _HIDING_SITE},
     header=(
         "import bi::*\nimport bj::*",
@@ -2007,10 +2024,10 @@ _SCENARIOS["an-alias-named-as-its-target-path-reaches-imports-beneath-that-path"
 
 
 class TestTransparentAliases:
-    """Alias spellings in every position, the file part and every REPL grouping."""
+    """Alias spellings in every position, with cross-mode entry-boundary coverage."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
 

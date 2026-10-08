@@ -620,9 +620,21 @@ class CheckedModule(_Record):
         return image
 
 
+def _contains_inference_variables(types: Iterable[Type]) -> bool:
+    """Check each immutable type handle once per boundary."""
+    checked: dict[int, Type] = {}
+    for typ in types:
+        key = id(typ)
+        if key not in checked:
+            checked[key] = typ
+            if contains_inference_var(typ):
+                return True
+    return False
+
+
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
     """Reject solver-local types that escape a checked-output boundary."""
-    if any(contains_inference_var(typ) for typ in types):
+    if _contains_inference_variables(types):
         raise AssertionError(f"inference variable leaked from checked output ({owner})")
 
 
@@ -1740,7 +1752,7 @@ class TypeEnvironment:
             *(sig.result for sig in self._function_signatures_by_node_id.values()),
             *(generic.template for generic in self._generic_types.values()),
         ]
-        if any(contains_inference_var(typ) for typ in types):
+        if _contains_inference_variables(types):
             raise AssertionError("inference variable leaked into a persistent type environment")
 
     def assert_shared_tables_closed(self) -> None:
@@ -1761,7 +1773,7 @@ class TypeEnvironment:
                 for _, field_type in typedef.fields
             ),
         ]
-        if any(contains_inference_var(typ) for typ in types):
+        if _contains_inference_variables(types):
             raise AssertionError("inference variable leaked into a persistent type environment")
 
     def resolve_binding(self, ref: BindingRef) -> Type | None:

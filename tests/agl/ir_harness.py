@@ -459,15 +459,20 @@ def resolve_repl_graph(graph: ModuleGraph):
 
 
 def make_inline_graph_from_files(
-    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+    tmp_path: Path,
+    modules: dict[str, str],
+    *,
+    default_stdlib: bool = True,
+    module_root: Path | None = None,
 ) -> ModuleGraph:
     """Build a test-only ``agm exec -c`` graph plus file-backed imports.
 
     The ``entry`` value follows inline-command semantics; every other value
     is a static library file. Use :func:`make_file_graph_from_files` when the
     entry itself is a file-style program with an explicit entry declaration.
+    *module_root* supplies already-written, immutable library fixtures.
     """
-    root = _write_module_root(tmp_path, modules)
+    root = module_root if module_root is not None else _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
     parsed = parse_entry_module(entry_source, entry_path=None, inline_code=True)
     graph, _next_id, _new_modules = build_repl_graph(
@@ -489,13 +494,15 @@ def make_file_graph_from_files(
     *,
     default_stdlib: bool = True,
     entry_path: Path | None = None,
+    module_root: Path | None = None,
 ) -> ModuleGraph:
     """Build a file-style graph from explicit entry-program source and imports.
 
     With *entry_path*, the entry is written there and loaded as that file, as
-    ``agm exec <file>`` loads it.
+    ``agm exec <file>`` loads it. *module_root* supplies already-written,
+    immutable library fixtures.
     """
-    root = _write_module_root(tmp_path, modules)
+    root = module_root if module_root is not None else _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
     if entry_path is not None:
         entry_path.write_text(entry_source, encoding="utf-8")

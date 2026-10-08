@@ -50,13 +50,14 @@ and :func:`option_identity` is the identity an ``as?`` cast pins.
 :func:`span_text` slices an error's span out of its source for tests that
 check a rejection outside the harness.
 
-A check splits into :data:`Part`\\ s, one test case each, so each case stays
-cheap: :class:`Scenario` tables feed :func:`assert_scenario` through
-:func:`scenario_params`, one part per chunk of a scenario's probes and either
-its file part or a batch of its groupings; a test that calls
-:func:`assert_verdicts` itself takes its parts from :func:`verdict_parts`.
-:func:`assert_repl_verdicts` checks one REPL history of separate entries, for
-histories that no file shares.
+A check splits into :data:`Part`\\ s, one cheap test case each.
+:func:`scenario_params` factors broad :class:`Scenario` tables: every semantic
+probe runs inline, while verdict representatives and all mode-specific probes
+also run as files and across REPL entry boundaries. Its ``cross_product`` option
+keeps every probe in every mode for the position matrix. Focused grouping tests
+use :func:`verdict_parts` to retain exhaustive partitions. Immutable library
+files are shared per worker; each check still constructs a fresh REPL session.
+:func:`assert_repl_verdicts` checks REPL-only histories of separate entries.
 
 :func:`all_groupings`, :func:`eval_setup_entries`, :func:`eval_grouped_final`
 and :func:`legal_groupings` are the general-purpose entry-grouping helpers
@@ -65,6 +66,7 @@ shared with ``tests/test_agl_repl_session.py``.
 
 from __future__ import annotations
 
+import hashlib
 import textwrap
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -107,8 +109,8 @@ Verdict = ProgramVerdict | ReplVerdict
 LegalGroupings = frozenset[tuple[int, ...]] | Literal["ALL"]
 Origins = frozenset[tuple[type, str]]
 Groupings = tuple[tuple[int, ...], ...]
-Part = Literal["file"] | Groupings
-"""One test case's share of a verdict check: the file part, or a batch of other groupings."""
+Part = Literal["inline", "file"] | Groupings
+"""One verdict check: inline probes, cross-mode probes, or a batch of REPL groupings."""
 
 K = TypeVar("K")
 T = TypeVar("T")
@@ -521,14 +523,28 @@ def _info_outcome(session: ReplSession, name: str) -> tuple[ReplVerdict, AglErro
     return ("accepted", type(None), None, description), None
 
 
-def _write_modules(session_dir: Path, modules: Mapping[str, str]) -> None:
-    """Write every module except ``entry`` under *session_dir*, one file per module."""
-    for name, source in modules.items():
-        if name == "entry":
-            continue
-        path = session_dir / f"{name}.agl"
+_MODULES_ROOT: Path | None = None
+_MODULE_ROOTS: dict[tuple[tuple[str, str], ...], Path] = {}
+
+
+def module_root(tmp_path: Path, modules: Mapping[str, str]) -> Path:
+    """Share immutable library files, never session state, across verdict checks."""
+    sources = tuple(sorted((name, source) for name, source in modules.items() if name != "entry"))
+    if _MODULES_ROOT is not None and sources in _MODULE_ROOTS:
+        return _MODULE_ROOTS[sources]
+    root = (
+        _MODULES_ROOT / hashlib.sha256(repr(sources).encode()).hexdigest()
+        if _MODULES_ROOT is not None
+        else tmp_path / "modules"
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    for name, source in sources:
+        path = root / f"{name}.agl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
+    if _MODULES_ROOT is not None:
+        _MODULE_ROOTS[sources] = root
+    return root
 
 
 def _assert_grouping(
@@ -546,9 +562,7 @@ def _assert_grouping(
     With *inline_failures*, a rejection's message must also be the inline
     entry's (``None`` only for a REPL history no inline entry shares).
     """
-    session_dir = tmp_path / ("repl-" + ".".join(map(str, sizes)))
-    session_dir.mkdir()
-    _write_modules(session_dir, modules)
+    session_dir = module_root(tmp_path, modules)
     session = ReplSession(cwd=session_dir, default_stdlib=stdlib)
     session.open()
     is_legal = eval_setup_entries(session, header, sizes[:-1])
@@ -601,7 +615,10 @@ def _inline_outcome(
     source = "\n".join((*header, probe.text))
     return _graph_outcome(
         make_inline_graph_from_files(
-            tmp_path / "inline", {"entry": source, **modules}, default_stdlib=stdlib
+            tmp_path / "inline",
+            {"entry": source, **modules},
+            default_stdlib=stdlib,
+            module_root=module_root(tmp_path, modules),
         )
     )
 
@@ -654,6 +671,7 @@ def _assert_file_part(
                 {"entry": text, **modules},
                 default_stdlib=stdlib,
                 entry_path=file_dir / "entry.agl",
+                module_root=module_root(tmp_path, modules),
             ),
             wrapped=body_start < len(text),
         )
@@ -681,9 +699,19 @@ def assert_verdicts(
     *legal* is the set of full groupings (over ``len(header) + 1`` items)
     whose setup entries succeed, ``"ALL"`` when every one does. *part*
     narrows the check to one :func:`verdict_parts` part; ``None`` is all of
-    it.
+    it; ``"inline"`` checks only the semantic probes without cross-mode replay.
     """
     legal_set = _legal_set(header, legal)
+    if part == "inline":
+        for key, probe in probes.items():
+            source = "\n".join((*header, probe.text))
+            _assert_program_outcome(
+                key,
+                _inline_outcome(tmp_path, modules, header, probe, stdlib),
+                probe,
+                partial(span_text, source),
+            )
+        return
     inline_failures = (
         _assert_file_part(tmp_path, modules, header, probes, legal_set, stdlib)
         if part is None or part == "file"
@@ -763,6 +791,7 @@ class Scenario:
     modules: Mapping[str, str] = field(default_factory=dict)
     legal: LegalGroupings = "ALL"
     part: Part | None = None
+    stdlib: bool = False
 
 
 def assert_scenario(tmp_path: Path, scenario: Scenario) -> None:
@@ -774,6 +803,7 @@ def assert_scenario(tmp_path: Path, scenario: Scenario) -> None:
         scenario.probes,
         legal=scenario.legal,
         part=scenario.part,
+        stdlib=scenario.stdlib,
     )
 
 
@@ -796,7 +826,9 @@ def _other_groupings(n: int) -> Groupings:
     return all_groupings(n)[:-1]
 
 
-def _grouping_parts(n: int, probes: int) -> list[tuple[Part, str]]:
+def _grouping_parts(
+    n: int, probes: int, *, groupings: Groupings | None = None
+) -> list[tuple[Part, str]]:
     """Batches of the other groupings over *n* items, each with its id, for *probes* probes.
 
     Each grouping opens one session and answers every probe in it, so fewer
@@ -805,7 +837,7 @@ def _grouping_parts(n: int, probes: int) -> list[tuple[Part, str]]:
     per_case = max(1, _CHECKS_PER_CASE // (_SESSION_CHECKS + probes))
     return [
         (batch, "groupings-" + ".".join(map(str, batch[0])))
-        for batch in _batches(_other_groupings(n), per_case)
+        for batch in _batches(_other_groupings(n) if groupings is None else groupings, per_case)
     ]
 
 
@@ -820,26 +852,74 @@ def verdict_parts(n: int, *, probes: int = 8) -> list[object]:
     ]
 
 
-def scenario_params(scenarios: Mapping[str, Scenario]) -> list[object]:
-    """``pytest.param(scenario)`` per part of every chunk of every scenario's probes.
+def _cross_mode_probes(probes: Mapping[str, Probe]) -> dict[str, Probe]:
+    """One probe per verdict kind; retain every mode-specific or structured diagnostic probe."""
+    selected: dict[str, Probe] = {}
+    seen: set[tuple[Phase, type[AglError] | None]] = set()
+    for key, probe in probes.items():
+        kind = (probe.phase, probe.error)
+        mode_specific = (
+            probe.info
+            or probe.type_entry is not None
+            or probe.in_file is not None
+            or probe.origins is not None
+            or probe.spelling is not None
+        )
+        if mode_specific or kind not in seen:
+            selected[key] = probe
+            if not mode_specific:
+                seen.add(kind)
+    return selected
 
-    For :func:`assert_scenario`. The file part checks chunks of
-    :data:`_PROBES_PER_FILE_CASE` probes; the groupings, chunks of as many
-    as one case answers in one session. A chunk is named by its first probe
-    key when its scenario has more than one.
+
+def _boundary_groupings(n: int) -> Groupings:
+    """Split at each boundary, plus the fully incremental history, without a Cartesian product."""
+    candidates = (*((split, n - split) for split in range(1, n)), (1,) * n)
+    return tuple(sizes for sizes in dict.fromkeys(candidates) if sizes != (n,))
+
+
+def scenario_params(
+    scenarios: Mapping[str, Scenario], *, cross_product: bool = False, stdlib: bool | None = None
+) -> list[object]:
+    """Factor semantic probes from mode/grouping coverage, or request the full cross product.
+
+    Every semantic probe runs inline. Representatives of each verdict kind also
+    run as a file, a single REPL entry, each entry-boundary split, and a fully
+    incremental history. Mode-specific probes are never sampled. The dedicated
+    position matrix takes *cross_product* to check every probe in every mode and
+    entry-boundary split; focused grouping tests use :func:`verdict_parts` unchanged.
     """
     params: list[object] = []
     for name, scenario in scenarios.items():
+        if stdlib is not None:
+            scenario = replace(scenario, stdlib=stdlib)
         n = len(scenario.header) + 1
-        keys = list(scenario.probes)
-        for size, parts in (
-            (_PROBES_PER_FILE_CASE, lambda _probes: [("file", "file")]),
-            (_CHECKS_PER_CASE - _SESSION_CHECKS, lambda probes: _grouping_parts(n, probes)),
-        ):
-            chunks = _batches(keys, size)
+        cross_mode = scenario.probes if cross_product else _cross_mode_probes(scenario.probes)
+        passes: list[tuple[Mapping[str, Probe], int, Callable[[int], list[tuple[Part, str]]]]] = []
+        if not cross_product:
+            passes.append(
+                (
+                    {key: probe for key, probe in scenario.probes.items() if key not in cross_mode},
+                    _PROBES_PER_FILE_CASE,
+                    lambda _probes: [("inline", "inline")],
+                )
+            )
+        groupings = _boundary_groupings(n)
+        passes.extend(
+            (
+                (cross_mode, _PROBES_PER_FILE_CASE, lambda _probes: [("file", "file")]),
+                (
+                    cross_mode,
+                    _CHECKS_PER_CASE - _SESSION_CHECKS,
+                    partial(_grouping_parts, n, groupings=groupings),
+                ),
+            )
+        )
+        for table, size, parts in passes:
+            chunks = _batches(list(table), size)
             for chunk in chunks:
                 prefix = name if len(chunks) == 1 else f"{name}-{chunk[0]}"
-                probes = {key: scenario.probes[key] for key in chunk}
+                probes = {key: table[key] for key in chunk}
                 params += [
                     pytest.param(replace(scenario, probes=probes, part=part), id=f"{prefix}-{id_}")
                     for part, id_ in parts(len(chunk))

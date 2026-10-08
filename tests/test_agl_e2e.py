@@ -56,6 +56,7 @@ from agm.agent.session import (
 from agm.agent.spec import PermissionMode
 from agm.agl.ir.builtin_vars import builtin_var_key
 from agm.agl.modules.ids import STD_CONFIG_ID
+from agm.agl.pipeline import PreparedProgram, ProgramDiscovery
 from agm.agl.semantics.values import IntValue, Value
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.sandbox.prepare import SandboxContext
@@ -993,6 +994,9 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
+type CompilationCache = dict[tuple[bool, bool], list[tuple[PreparedProgram, ProgramDiscovery]]]
+
+
 def _run_prepared_entry(
     runtime: Any,
     prepared: Any,
@@ -1002,6 +1006,7 @@ def _run_prepared_entry(
     positional: list[Any] | None = None,
     process_environment: dict[str, str] | None = None,
     engine_seeds: dict[Any, Value] | None = None,
+    discovery: ProgramDiscovery | None = None,
 ) -> Any:
     """Run the sole selected file-style entry through the public pipeline seams.
 
@@ -1011,7 +1016,8 @@ def _run_prepared_entry(
     setting — is evaluated and seeded exactly like one that declares
     parameters or receives module parameters.
     """
-    discovery = runtime.discover_programs(prepared)
+    if discovery is None:
+        discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
         return runtime.run_prepared(
             prepared, builtin_var_seeds=engine_seeds, process_environment=process_environment
@@ -1173,6 +1179,7 @@ def _run_program(
     program: Path,
     monkeypatch: pytest.MonkeyPatch,
     get_sandbox_context: Callable[[], SandboxContext] | None,
+    compilations: CompilationCache | None = None,
 ) -> tuple[Any, dict[str, ScriptedAgent], FakeShell, list[_Script]]:
     from agm.agl import PipelineDriver
     from agm.agl.runtime.externs import ExternRegistry
@@ -1235,9 +1242,26 @@ def _run_program(
         unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell),
         unittest.mock.patch("agm.core.http.open_session", lambda: http_session),
     ):
-        prepared = prepare(
-            source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
+        key = (default_stdlib, bool(scenario.get("inline_entry")))
+        capabilities = runtime.host_environment().capabilities
+        cached = next(
+            (
+                (prepared, discovery)
+                for prepared, discovery in (compilations or {}).get(key, [])
+                if discovery.compiled is not None
+                and discovery.compiled.capabilities == capabilities
+            ),
+            None,
         )
+        if cached is None:
+            prepared = prepare(
+                source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
+            )
+            discovery = runtime.discover_programs(prepared)
+            if compilations is not None and discovery.compiled is not None:
+                compilations.setdefault(key, []).append((prepared, discovery))
+        else:
+            prepared, discovery = cached
 
         try:
             result = _run_prepared_entry(
@@ -1248,6 +1272,7 @@ def _run_program(
                 positional=scenario.get("positional"),
                 process_environment=scenario.get("process_environment"),
                 engine_seeds=engine_seeds,
+                discovery=discovery,
             )
         except SystemExit as exc:
             result = exc
@@ -1975,8 +2000,30 @@ def _scenario_params() -> list[Any]:
     for program in sorted(PROGRAMS_DIR.rglob("*.agl")):
         sidecar = program.with_name(program.stem + ".scenarios.json")
         rel = program.relative_to(PROGRAMS_DIR).with_suffix("")
+        groups: list[tuple[dict[str, Any], ...]] = []
+        batch: list[dict[str, Any]] = []
         for scenario in _load_json(sidecar)["scenarios"]:
-            params.append(pytest.param(program, scenario, id=f"{rel}::{scenario['name']}"))
+            shareable = not (
+                program.is_relative_to(EXTERNS_PROGRAMS_DIR)
+                or program.is_relative_to(RESOURCE_PROGRAMS_DIR)
+                or {"filesystem", "sandbox_home", "module_roots", "stdlib_root", "jev"}
+                & scenario.keys()
+            )
+            if not shareable and batch:
+                groups.append(tuple(batch))
+                batch = []
+            if shareable:
+                batch.append(scenario)
+            if not shareable or len(batch) == 4:
+                group = tuple(batch) if shareable else (scenario,)
+                groups.append(group)
+                batch = []
+        if batch:
+            groups.append(tuple(batch))
+        params.extend(
+            pytest.param(program, group, id=f"{rel}::" + "+".join(s["name"] for s in group))
+            for group in groups
+        )
     return params
 
 
@@ -1987,13 +2034,27 @@ def _rejection_params() -> list[Any]:
     ]
 
 
-@pytest.mark.parametrize(("program", "scenario"), _scenario_params())
-def test_program_scenario(
+@pytest.mark.parametrize(("program", "scenarios"), _scenario_params())
+def test_program_scenarios(
+    program: Path,
+    scenarios: tuple[dict[str, Any], ...],
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Share immutable compilation only; every scenario gets fresh runtime and patches."""
+    compilations: CompilationCache | None = {} if len(scenarios) > 1 else None
+    for scenario in scenarios:
+        with pytest.MonkeyPatch.context() as patch:
+            _assert_program_scenario(program, scenario, capsys, tmp_path, patch, compilations)
+
+
+def _assert_program_scenario(
     program: Path,
     scenario: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    compilations: CompilationCache | None,
 ) -> None:
     # Pinned so a sandboxed exec's ``cwd or Path.cwd()`` fallback never picks
     # up the real process cwd -- a checkout with a real ``.sandbox/`` would
@@ -2007,7 +2068,12 @@ def test_program_scenario(
     scenario = _prepare_temp_filesystem(scenario, tmp_path)
     scenario, get_sandbox_context = _apply_sandbox_home(scenario, tmp_path)
     result, agents, shell, scripts = _run_program(
-        program.read_text(encoding="utf-8"), scenario, program, monkeypatch, get_sandbox_context
+        program.read_text(encoding="utf-8"),
+        scenario,
+        program,
+        monkeypatch,
+        get_sandbox_context,
+        compilations,
     )
     out = capsys.readouterr().out
     expect = scenario["expect"]
@@ -2036,10 +2102,10 @@ def test_static_rejection(program: Path) -> None:
     spec = _load_json(program.with_name(program.stem + ".expect.json"))
     expect = spec["diagnostic"]
     roots = _fixture_roots(spec)
-    result = _run_source_entry(
-        PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None),
-        program.read_text(encoding="utf-8"),
-        roots=roots,
+    prepared = PipelineDriver.prepare_program(program.read_text(encoding="utf-8"), roots=roots)
+    # Invalid programs need neither discovery nor argument preflight: compile once.
+    result = PipelineDriver(resolve_agent_spec=None, get_sandbox_context=None).run_prepared(
+        prepared
     )
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"

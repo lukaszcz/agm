@@ -6,9 +6,8 @@ reaches is the route's; a ``::`` anchor reads the current module only and a
 ``/``-anchored path the module only. A local scope and a same-named
 imported scope look combined, each supplying the members it declares.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -191,6 +190,7 @@ _SCENARIOS = {
         probes=_MISSING_SEGMENT_PROBES,
     ),
     "populated-local-scope-named-like-a-route": Scenario(
+        stdlib=True,
         modules={"pkg/Foo": _PKG_FOO_3},
         header=(
             "import pkg/Foo",
@@ -309,6 +309,7 @@ _SCENARIOS = {
         },
     ),
     "unrelated-local-scope-named-like-a-route": Scenario(
+        stdlib=True,
         modules={"pkg/Foo": _PKG_FOO_3},
         header=(
             "import pkg/Foo",
@@ -420,6 +421,7 @@ _SCENARIOS = {
         },
     ),
     "local-enum-named-like-a-route": Scenario(
+        stdlib=True,
         modules={"pkg/Foo": _PKG_FOO_3},
         header=(
             "import pkg/Foo",
@@ -531,6 +533,7 @@ _SCENARIOS = {
         },
     ),
     "route-without-local-declaration": Scenario(
+        stdlib=True,
         modules={"pkg/Foo": _PKG_FOO_3},
         header=("import pkg/Foo",),
         probes={
@@ -945,6 +948,7 @@ _SCENARIOS = {
         },
     ),
     "local-scope-named-like-an-imported-module-with-types": Scenario(
+        stdlib=True,
         modules={"palette": _PALETTE_2},
         header=(
             "import palette",
@@ -973,6 +977,7 @@ _SCENARIOS = {
         },
     ),
     "use-alias-beside-same-named-local-scope": Scenario(
+        stdlib=True,
         header=(
             "use S as Geo",
             (
@@ -1014,5 +1019,5 @@ class TestRouteAndLocalScopeQualifiers:
     """Own paths beside module routes, anchors, and local scopes beside imported ones."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

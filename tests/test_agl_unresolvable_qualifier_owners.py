@@ -7,9 +7,8 @@ alias, a record and an anchored own scope have no such member. A record
 reached through a scope is never an enum member, so testing or matching an
 enum value against it is a type error.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -62,6 +61,7 @@ _LIB_2 = (
 
 _SCENARIOS = {
     "nothing-declared": Scenario(
+        stdlib=True,
         header=(),
         probes={
             "nodef-annot": accepted(
@@ -319,6 +319,7 @@ _SCENARIOS = {
         },
     ),
     "builtin-and-anchored-owners": Scenario(
+        stdlib=True,
         modules={"lib": _LIB_2},
         header=(),
         probes={
@@ -355,5 +356,5 @@ class TestUnresolvableQualifierOwners:
     """Unknown qualifiers and members, and records tested as enum members."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

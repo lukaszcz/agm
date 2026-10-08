@@ -13,8 +13,8 @@ route competes like any other contribution. Nothing found is a hidden member
 when a ``hiding`` removed the path, an unknown member when its qualifier names
 something visible, else an unknown qualifier.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`).
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -524,6 +524,7 @@ _SCENARIOS = {
         },
     ),
     "hiding-an-enum-member-path-removes-its-bare-spelling": Scenario(
+        stdlib=True,
         modules={"a": _REFERENCED_R},
         header=("import std/prelude::* hiding Option::Some", "import a::* hiding R"),
         probes={
@@ -534,6 +535,7 @@ _SCENARIOS = {
         },
     ),
     "a-hidden-enum-member-spelling-is-free": Scenario(
+        stdlib=True,
         modules={"lib": "def Some() -> int = 1\ndef R() -> int = 2\n", "a": _REFERENCED_R},
         header=(
             "import std/prelude::* hiding Option::Some",
@@ -546,6 +548,7 @@ _SCENARIOS = {
         },
     ),
     "another-import-keeps-a-hidden-enum-member": Scenario(
+        stdlib=True,
         modules={"a": _REFERENCED_R},
         header=(
             "import std/prelude::* hiding Option::Some",
@@ -710,6 +713,7 @@ _SCENARIOS = {
         },
     ),
     "own-scope-and-imported-scope-combine": Scenario(
+        stdlib=True,
         modules={"M": _M},
         header=("import M::*", _OWN_AGENT, _OWN_GEO),
         probes={
@@ -846,6 +850,7 @@ _SCENARIOS = {
         probes={"one-declaration": accepted("lib::f()", "int")},
     ),
     "route-and-own-path": Scenario(
+        stdlib=True,
         modules={"lib": _ROUTED},
         header=(
             "import lib",
@@ -875,6 +880,7 @@ _SCENARIOS = {
         },
     ),
     "an-alias-segment-stands-for-every-path-beneath-its-target": Scenario(
+        stdlib=True,
         modules={"al": _ALIASED_BASE},
         header=("import al::*",),
         probes={
@@ -901,16 +907,19 @@ _SCENARIOS = {
         },
     ),
     "an-alias-chain-stands-for-the-paths-beneath-its-last-target": Scenario(
+        stdlib=True,
         modules={"al": _ALIASED_BASE},
         header=("import al::*", "type H = Geo"),
         probes=_beneath_alias_probes("H"),
     ),
     "an-own-alias-segment-stands-for-an-imported-target-path": Scenario(
+        stdlib=True,
         modules={"al": _ALIASED_BASE},
         header=("import al", "type G = al::Base"),
         probes=_beneath_alias_probes("G"),
     ),
     "an-own-alias-segment-stands-for-an-own-target-path": Scenario(
+        stdlib=True,
         header=(_OWN_BASE, "type G = Base"),
         probes={
             "nested-value": accepted("G::Inner(y = 1)", "record Base::Inner\n  y: int"),
@@ -920,6 +929,7 @@ _SCENARIOS = {
         },
     ),
     "a-generic-alias-segment-takes-type-arguments-only-for-an-inline-member": Scenario(
+        stdlib=True,
         modules={"lib": _GENERIC_BASE},
         header=("import lib::*",),
         probes={
@@ -982,6 +992,7 @@ _SCENARIOS = {
         },
     ),
     "a-root-anchored-builtin-static-owner-is-read-like-any-qualifier": Scenario(
+        stdlib=True,
         header=(),
         probes={
             "unknown-static": rejected("Session::bogus()", UnknownMemberError, "Session::bogus"),
@@ -1002,22 +1013,26 @@ _SCENARIOS = {
         probes={"own-declaration": rejected("record G::Inner\n  q: int", AglScopeError, "G")},
     ),
     "a-braced-use-renames-a-type": Scenario(
+        stdlib=True,
         modules={"e": _RENAMED},
         header=("import e", "use e::{Color as C, Pt as R, P as Q}"),
         probes=_renamed_type_probes("use s::{L as M}"),
     ),
     "an-unbraced-use-renames-a-type-like-a-braced-one": Scenario(
+        stdlib=True,
         modules={"e": _RENAMED},
         # One entry: a REPL entry using a module supersedes its earlier uses.
         header=("import e", "use e::Color as C\nuse e::Pt as R\nuse e::P as Q"),
         probes=_renamed_type_probes("use s::L as M"),
     ),
     "a-one-segment-use-renames-a-type-like-a-braced-one": Scenario(
+        stdlib=True,
         modules={"e": _RENAMED},
         header=("import e::*", "use Color as C\nuse Pt as R\nuse P as Q"),
         probes=_renamed_type_probes("use L as M", _ROOT_L, "L"),
     ),
     "alias-segments": Scenario(
+        stdlib=True,
         modules={"e": _COLOR, "f": _SHADE},
         header=("import e", "import f", "use e::Color as C"),
         probes={
@@ -1048,6 +1063,7 @@ _SCENARIOS = {
         },
     ),
     "generic-use-alias-segments": Scenario(
+        stdlib=True,
         modules={"lib": _OPT},
         header=("import lib", "use lib::Opt as B"),
         probes={
@@ -1063,6 +1079,7 @@ _SCENARIOS = {
         },
     ),
     "hidden-unknown-member-and-unknown-qualifier": Scenario(
+        stdlib=True,
         modules={"tl": _TL},
         # One entry: a REPL entry re-importing a module supersedes its earlier import.
         header=("import tl\nimport tl::* hiding Geo::Inner",),
@@ -1212,6 +1229,7 @@ _SCENARIOS = {
         },
     ),
     "applied-owner-of-a-record-pattern": Scenario(
+        stdlib=True,
         header=(_NESTED_UNDER_GENERICS,),
         probes={
             "scoped-alias-owner": accepted(
@@ -1754,10 +1772,10 @@ _SCENARIOS = {
 
 
 class TestFullPathLookup:
-    """Own-first full-path lookup in every position, the file part and every REPL grouping."""
+    """Own-first full-path lookup in every position, with cross-mode entry-boundary coverage."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
 

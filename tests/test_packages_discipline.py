@@ -315,6 +315,15 @@ class TestPackageDiscipline:
 
         validate_package(package)
 
+    def test_ownership_without_packages_does_not_access_filesystem(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def unavailable(path: Path, strict: bool = False) -> Path:
+            raise OSError
+
+        monkeypatch.setattr(Path, "resolve", unavailable)
+        assert owning_package(tmp_path / "main.agl", ()) is None
+
     def test_maps_only_module_tree_files_to_their_owning_package(self) -> None:
         package = _package("valid")
         module = package.module_root / "review.agl"

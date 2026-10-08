@@ -5,9 +5,8 @@ supplies the spelling, and selects the other contribution's member when
 one does. Hiding a nested record leaves its owner's members intact, and
 hiding an enum member leaves the enum's nested records intact.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -74,6 +73,7 @@ _SCENARIOS = {
         },
     ),
     "hidden-nested-record-of-enum": Scenario(
+        stdlib=True,
         modules={"en": _EN},
         header=("import en::* hiding Color::Extra",),
         probes={
@@ -92,6 +92,7 @@ _SCENARIOS = {
         },
     ),
     "hidden-enum-member": Scenario(
+        stdlib=True,
         modules={"en": _EN},
         header=("import en::* hiding Color::Red",),
         probes={
@@ -148,6 +149,7 @@ _SCENARIOS = {
         },
     ),
     "hidden-member-supplied-by-other-import": Scenario(
+        stdlib=True,
         modules={"en": _EN_2, "en2": _EN2_2},
         header=(
             "import en::* hiding Color::Red",
@@ -497,5 +499,5 @@ class TestHiddenMemberSelection:
     """Hidden members across imports, uses, routes and method paths."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)

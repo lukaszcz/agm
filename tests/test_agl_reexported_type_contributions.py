@@ -6,9 +6,8 @@ region by a scoped ``export``, is still that type through ``use`` and import
 tails alike, in every position, and ``hiding`` one of its members on such a
 surface hides it.
 
-Every probe is checked in the file part and in every legal REPL grouping of its
-scenario's header (see :mod:`tests.agl.qualifier_support`): both modes reach
-the same verdict, error span and message, or accepted identity.
+Every probe runs inline; verdict representatives also cover file and REPL
+entry boundaries through :mod:`tests.agl.qualifier_support`.
 """
 
 from __future__ import annotations
@@ -114,26 +113,31 @@ def _hidden_red_probes() -> dict[str, Probe]:
 
 _SCENARIOS = {
     "use-of-a-reexporting-module": Scenario(
+        stdlib=True,
         modules=_REEXPORTS,
         header=("import mid2", "use mid2::*"),
         probes=_reexported_type_probes(),
     ),
     "selective-use-of-a-reexporting-module": Scenario(
+        stdlib=True,
         modules=_REEXPORTS,
         header=("import mid2", "use mid2::{Color, Point, Geo}"),
         probes=_reexported_type_probes(),
     ),
     "use-of-a-scoped-reexport": Scenario(
+        stdlib=True,
         modules=_REEXPORTS,
         header=("import mid", "use mid::Shapes::*"),
         probes=_reexported_type_probes(),
     ),
     "selective-use-of-a-scoped-reexport": Scenario(
+        stdlib=True,
         modules=_REEXPORTS,
         header=("import mid", "use mid::Shapes::{Color, Point, Geo}"),
         probes=_reexported_type_probes(),
     ),
     "import-tail-of-a-reexporting-module": Scenario(
+        stdlib=True,
         modules=_REEXPORTS,
         header=("import mid2::*",),
         probes=_reexported_type_probes(),
@@ -170,7 +174,7 @@ class TestReexportedTypes:
     """Re-exported types, used or imported, in every position."""
 
     @pytest.mark.parametrize("scenario", scenario_params(_SCENARIOS))
-    def test_file_and_every_repl_grouping_agree(self, tmp_path: Path, scenario: Scenario) -> None:
+    def test_semantics_and_entry_boundaries(self, tmp_path: Path, scenario: Scenario) -> None:
         assert_scenario(tmp_path, scenario)
 
     def test_repeated_verdicts_observe_reexported_enum_edits(self, tmp_path: Path) -> None:

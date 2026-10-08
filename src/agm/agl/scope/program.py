@@ -32,7 +32,11 @@ from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.artifact_cache import (
+    retain_module_declarations,
+    retain_module_exports,
     retain_resolved_modules,
+    retained_module_declarations,
+    retained_module_exports,
     retained_module_sources,
     retained_resolved_modules,
 )
@@ -840,6 +844,15 @@ _DeclInfo = dict[QName, DeclInfo]
 
 
 @dataclass(frozen=True, slots=True)
+class _ModuleExports:
+    """A settled declaration/scope surface, including hidden paths beneath aliases."""
+
+    declarations: dict[NameAtom, QName]
+    scopes: dict[NameAtom, ScopeOrigins]
+    withheld: dict[NameAtom, frozenset[QName]]
+
+
+@dataclass(frozen=True, slots=True)
 class _ModuleTables:
     """One module's share of the whole-program tables, collected from its declarations."""
 
@@ -1011,7 +1024,14 @@ def resolve_program(
         reusable.update(cached_modules)
     cached_modules = reusable
 
-    tables = {mid: _module_tables(mid, loaded.program) for mid, loaded in graph.modules.items()}
+    tables: dict[ModuleId, _ModuleTables] = {}
+    for mid, loaded in graph.modules.items():
+        table = retained_module_declarations(loaded) if mid != graph.entry_id else None
+        if table is None:
+            table = _module_tables(mid, loaded.program)
+            if mid != graph.entry_id:
+                retain_module_declarations(loaded, table)
+        tables[mid] = table
     export_maps = {mid: dict(table.exports) for mid, table in tables.items()}
     scope_export_maps = {mid: dict(table.scope_exports) for mid, table in tables.items()}
     withheld: Withheld = {mid: {} for mid in tables}
@@ -1310,8 +1330,19 @@ def resolve_program(
     # reach, then prepared again over each re-resolution until they settle,
     # so every member reads its importees' final exports.
     # ------------------------------------------------------------------
+    cached_exports = retained_module_exports(retainable)
     for component in graph.sccs:
         members = tuple(sorted(component, key=_mid_sort_key))
+        if all(mid in cached_exports for mid in members):
+            # Restore the entire component before preparing any member of a cycle.
+            for mid in members:
+                surface = cached_exports[mid]
+                export_maps[mid] = dict(surface.declarations)
+                scope_export_maps[mid] = dict(surface.scopes)
+                withheld[mid] = dict(surface.withheld)
+            for mid in members:
+                prepare(mid)
+            continue
         if len(members) > 1 or members[0] in graph.adjacency.get(members[0], ()):
             _resolve_reexports(
                 export_maps,
@@ -1360,6 +1391,13 @@ def resolve_program(
 
     resolved_modules = {mid: resolved_modules[mid] for mid in graph.modules}
     retain_resolved_modules(retainable, resolved_modules)
+    retain_module_exports(
+        retainable,
+        {
+            mid: _ModuleExports(export_maps[mid], scope_export_maps[mid], withheld[mid])
+            for mid in resolved_modules
+        },
+    )
     # What reads a module from now on (spelling) is read from its resolution alone, as a cached
     # module's is: the resolvers, and everything they hold, are not kept.
     resolvers.clear()

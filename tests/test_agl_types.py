@@ -18,10 +18,13 @@ Coverage:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.semantics import types as types_module
 from agm.agl.semantics.type_table import TypeDef, TypeTable, comparable_types, is_assignable_in
 from agm.agl.semantics.types import (
     ArrayType,
@@ -60,6 +63,43 @@ from tests.agl.module_graph import resolve_and_check_inline_entry
 # operands, whose comparable_types arms never consult the TypeTable; an empty
 # table is a valid (unused) argument for those calls.
 _EMPTY_TABLE = TypeTable()
+
+
+@pytest.fixture
+def inference_scans(monkeypatch: pytest.MonkeyPatch) -> list[Type]:
+    scans: list[Type] = []
+    original = types_module.iter_type
+
+    def counted(typ: Type) -> Iterator[Type]:
+        scans.append(typ)
+        return original(typ)
+
+    monkeypatch.setattr(types_module, "iter_type", counted)
+    return scans
+
+
+@pytest.mark.parametrize("flexible", [False, True])
+def test_inference_variable_scans_reuse_immutable_types(
+    inference_scans: list[Type], flexible: bool
+) -> None:
+    leaf: Type = InferenceVarType(781_253) if flexible else IntType()
+    typ = RecordType("ClosureScan", type_args=(ArrayType(DictType(TextType(), leaf)),))
+    for _ in range(32):
+        assert contains_inference_var(typ) is flexible
+    assert sum(isinstance(typ, RecordType) for typ in inference_scans) <= 1
+
+
+def test_inference_variable_scan_retention_is_bounded(inference_scans: list[Type]) -> None:
+    first = RecordType("EvictionScan", decl_id=900_000)
+    assert contains_inference_var(first) is False
+    for decl_id in range(900_001, 909_001):
+        assert contains_inference_var(RecordType("EvictionScan", decl_id=decl_id)) is False
+
+    inference_scans.clear()
+    assert contains_inference_var(first) is False
+    assert contains_inference_var(first) is False
+    assert inference_scans == [first]
+
 
 # ---------------------------------------------------------------------------
 # Membership-aware assignability

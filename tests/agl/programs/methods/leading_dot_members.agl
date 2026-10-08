@@ -1,0 +1,45 @@
+enum VerifyResult
+  | Complete(reason: text)
+  | Incomplete(reason: text)
+
+record Meter
+  var value: int
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+def Meter::copy(self) -> Meter = Meter(self.value)
+def Meter::pair[T](self, other: T) -> array[T] = [other, other]
+def Meter::offset(self, target: Meter) -> int = target |> .add(self.value)
+
+record Holder
+  meters: array[Meter]
+  apply: int -> int
+
+def choose[A, B](callback: A -> B, value: A) -> B = callback(value)
+
+program def main(mode: text) -> unit =
+  if mode == "fields" =>
+    let r: VerifyResult = Incomplete("unfinished")
+    let reason' = r as VerifyResult::Incomplete |> .reason
+    let reason: VerifyResult::Incomplete -> text = .reason
+    print(reason')
+    print(reason(Incomplete("pending")))
+    print([Incomplete("a"), Incomplete("b")].map(.reason))
+    print(choose(.reason, Incomplete("generic")))
+  else =>
+    let meter = Meter(4)
+    let holder = Holder([meter], fn(value: int) => value + 1)
+    let add: Meter -> int -> int = .add
+    let bound = add(meter)
+    print(bound(3))
+    print(holder |> .apply(3))
+    print(holder |> .meters[0].copy().value)
+    print(meter |> .pair::[text]("typed")[1])
+    let pair: Meter -> text -> array[text] = .pair::[text]
+    print(pair(meter)("reference"))
+    let apply: Holder -> int -> int = .apply
+    print(apply(holder)(5))
+    print((meter |> .add)(0))
+    print(meter.offset(Meter(10)))
+    let read: Meter -> int = .value
+    meter.value := 9
+    print(read(meter))

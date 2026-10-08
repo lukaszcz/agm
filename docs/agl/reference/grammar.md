@@ -636,18 +636,17 @@ juxt_suffix    ::= "." field_name
                | "(" arg_list? ")"
                | "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
 
-postfix        ::= postfix "." field_name          (* runtime field access *)
-               | postfix "(" arg_list? ")"         (* call with parentheses *)
-               | postfix "[" expr "]"              (* adjacent bracket only *)
-               | postfix "::" "[" type_expr ("," type_expr)* "]"   (* explicit type application *)
-               | atom
+postfix        ::= atom postfix_suffix* | leading_dot_expr
+postfix_suffix ::= "." field_name                    (* member selection *)
+               | "(" arg_list? ")"                  (* call with parentheses *)
+               | "[" expr "]"                       (* adjacent bracket only *)
+               | "::" "[" type_expr ("," type_expr)* "]"   (* explicit type application *)
 
 applied_type_qualified_constructor ::= qualifier_chain NAME "[" type_expr ("," type_expr)* "]" "::" NAME
                                            | NAME "[" type_expr ("," type_expr)* "]" "::" NAME
                                            (* `[` is byte-adjacent to the preceding NAME *)
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
-               | leading_dot_expr
                | "(" ")"                           (* unit literal *)
                | array_literal
                | dict_literal
@@ -679,13 +678,15 @@ raise_expr     ::= "raise" or_expr
 return_expr    ::= "return" or_expr?
 break_expr     ::= "break"
 continue_expr  ::= "continue"
-leading_dot_expr ::= "." field_name value_type_args? "(" arg_list? ")"
+leading_dot_expr ::= "." field_name postfix_suffix*
 ```
 
-A leading-dot invocation is a unary function whose omitted receiver type is
-inferred from a concrete function context: `.f(args)` behaves like a lambda
-that calls `self.f(args)`. It supports explicit method type arguments but
-always requires the parenthesized invocation.
+A leading-dot expression is a unary function whose omitted receiver type comes
+from its function context. `.field` selects a field or bound method, and
+`.f(args)` invokes the selected member. Every postfix suffix belongs to the
+function body until parentheses end the chain: `.copy().value` behaves like
+`fn(receiver: T) => receiver.copy().value`. Arguments retain their enclosing
+bindings. See [Methods](functions.md#methods) for typing and selection rules.
 
 A bare name atom is resolved by scope and position: it may name a variable, a
 record constructor, an injected enum-member constructor, or a generic

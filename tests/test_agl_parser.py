@@ -2530,7 +2530,7 @@ class TestFieldAccessAndConstructors:
         assert isinstance(section, Lambda)
         assert section.implicit_self
         assert len(section.params) == 1
-        assert section.params[0].name == "self"
+        assert section.params[0].name
         assert section.params[0].type_expr is None
         assert isinstance(section.body, Call)
         assert len(section.body.type_args) == 1
@@ -2540,7 +2540,7 @@ class TestFieldAccessAndConstructors:
         assert isinstance(section.body.callee, FieldAccess)
         assert section.body.callee.field == "map"
         assert isinstance(section.body.callee.obj, VarRef)
-        assert section.body.callee.obj.name == "self"
+        assert section.body.callee.obj.name == section.params[0].name
 
     def test_leading_dot_invocation_accepts_no_method_arguments(self) -> None:
         section = first(parse(".size()"))
@@ -2548,6 +2548,63 @@ class TestFieldAccessAndConstructors:
         assert isinstance(section.body, Call)
         assert section.body.args == ()
         assert section.body.named_args == ()
+
+    @pytest.mark.parametrize(
+        ("source", "explicit"),
+        (
+            (".reason", "receiver.reason"),
+            (".add", "receiver.add"),
+            (".pair::[text]", "receiver.pair::[text]"),
+            (".owner.name", "receiver.owner.name"),
+            (".meters[0].copy().value", "receiver.meters[0].copy().value"),
+            (".pair::[text](label = x)[1]", "receiver.pair::[text](label = x)[1]"),
+            (".add(?)", "receiver.add(?)"),
+            (".map(.reason)", "receiver.map(.reason)"),
+        ),
+    )
+    def test_leading_dot_chain_matches_an_explicit_receiver(
+        self, source: str, explicit: str
+    ) -> None:
+        section = first(parse(source))
+        assert isinstance(section, Lambda)
+        assert section.implicit_self
+        expected = first(parse(explicit))
+        assert isinstance(expected, syntax.Expr)
+        actual_nodes: list[object] = []
+        expected_nodes: list[object] = []
+        walk(section.body, actual_nodes.append)
+        walk(expected, expected_nodes.append)
+        assert [type(node) for node in actual_nodes] == [type(node) for node in expected_nodes]
+        assert [node.field for node in actual_nodes if isinstance(node, FieldAccess)] == [
+            node.field for node in expected_nodes if isinstance(node, FieldAccess)
+        ]
+        assert [
+            "receiver" if node.name == section.params[0].name else node.name
+            for node in actual_nodes
+            if isinstance(node, VarRef)
+        ] == [
+            "receiver" if node.name == section.params[0].name else node.name
+            for node in expected_nodes
+            if isinstance(node, VarRef)
+        ]
+
+    def test_parentheses_end_a_leading_dot_chain(self) -> None:
+        call = first(parse("(.add)(meter)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, Lambda)
+        assert isinstance(call.callee.body, FieldAccess)
+        assert call.callee.body.field == "add"
+
+    def test_juxtaposition_ends_a_leading_dot_chain(self) -> None:
+        call = first(parse(".add meter"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, Lambda)
+        assert isinstance(call.callee.body, FieldAccess)
+
+    @pytest.mark.parametrize("source", (".value := 1", "(.value := 1)"))
+    def test_leading_dot_expression_is_not_an_assignment_target(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
     def test_constructor_bare(self) -> None:
         c = first(parse("Pass"))

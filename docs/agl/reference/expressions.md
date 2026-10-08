@@ -419,9 +419,10 @@ program def main() -> unit =
 
 Thus `meter.add(3)` calls the method with `meter` as its receiver, while
 `meter.add` can be stored, passed to another function, or partially applied.
-A leading-dot invocation such as `.add(3)` instead produces a unary function;
-its receiver type comes from the surrounding function context. This supports
-forms such as `meters |> .map(.add(3))`. See
+A leading-dot expression produces a unary function over a contextual receiver:
+`.value` reads its field, `.add` selects its bound method, and `.add(3)` invokes
+that method. Postfix chains such as `.copy().value` belong to the function body.
+This supports forms such as `meters |> .map(.value)`. See
 [Methods](functions.md#methods) for its contextual typing rules.
 Method selection uses the receiver's static type and the declaration routes
 visible in this module. A same-named field and visible method are ambiguous,

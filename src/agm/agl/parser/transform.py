@@ -228,6 +228,25 @@ class _JuxtField:
 
 
 @dataclass(frozen=True, slots=True)
+class _LeadingDot:
+    """A receiver section awaiting the end of its postfix chain."""
+
+    param: syntax.Param
+    body: syntax.Expr
+
+
+_PostfixExpr: TypeAlias = syntax.Expr | _LeadingDot
+
+
+def _postfix_body(expr: _PostfixExpr) -> syntax.Expr:
+    return expr.body if isinstance(expr, _LeadingDot) else expr
+
+
+def _continue_postfix(base: _PostfixExpr, body: syntax.Expr) -> _PostfixExpr:
+    return replace(base, body=body) if isinstance(base, _LeadingDot) else body
+
+
+@dataclass(frozen=True, slots=True)
 class _QualifierChainSegment:
     """Transformer-internal qualifier segment retaining its leading anchor."""
 
@@ -1079,7 +1098,8 @@ class AstBuilder(Transformer):
 
     def assign_stmt(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
         # Grammar: postfix ASSIGN expr
-        lhs, value = (cast(syntax.Expr, a) for a in args if _is_expr_node(a))
+        lhs = self._finish_postfix(cast(_PostfixExpr, args[0]))
+        value = cast(syntax.Expr, args[-1])
         target: syntax.AssignTarget
         if isinstance(lhs, syntax.VarRef):
             target = syntax.NameTarget(
@@ -1319,39 +1339,36 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def leading_dot_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
-        """Desugar ``.method(args)`` to a unary lambda over contextual ``self``."""
+    def leading_dot_expr(self, meta: Meta, args: _Args) -> _LeadingDot:
+        """Start a member section with an unspellable receiver binding."""
         span = self._span_from_meta(meta)
         name_token = _find_name_token(args)
         self_span = token_span(name_token, self._source)
         param = syntax.Param(
-            name="self",
+            name="<leading-dot receiver>",
             type_expr=None,
             default=None,
             span=self_span,
             node_id=self._next_id(),
         )
-        receiver = syntax.VarRef(name="self", span=self_span, node_id=self._next_id())
+        receiver = syntax.VarRef(name=param.name, span=self_span, node_id=self._next_id())
         member = syntax.FieldAccess(
             obj=receiver,
             field=str(name_token),
             span=span,
             node_id=self._next_id(),
         )
-        pos_args, named_args = self._call_args_from_children(args, span)
-        body = syntax.Call(
-            callee=member,
-            args=pos_args,
-            named_args=named_args,
-            span=span,
-            node_id=self._next_id(),
-            type_args=_find_type_args(args),
-        )
+        return _LeadingDot(param=param, body=member)
+
+    def _finish_postfix(self, expr: _PostfixExpr) -> syntax.Expr:
+        """Close a postfix chain, wrapping an omitted receiver in a unary lambda."""
+        if not isinstance(expr, _LeadingDot):
+            return expr
         return syntax.Lambda(
-            params=(param,),
+            params=(expr.param,),
             return_type=None,
-            body=body,
-            span=span,
+            body=expr.body,
+            span=expr.body.span,
             node_id=self._next_id(),
             implicit_self=True,
         )
@@ -1421,12 +1438,13 @@ class AstBuilder(Transformer):
                 return self._finalize_call_args(raw_pos, raw_named, call_span=span)
         return (), ()
 
-    def call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """postfix LPAR arg_list? RPAR → Call node."""
-        callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
+    def call(self, meta: Meta, args: _Args) -> _PostfixExpr:
+        """Append a parenthesized call to a postfix chain."""
+        base = cast(_PostfixExpr, args[0])
+        callee, type_args = _split_type_apply(_postfix_body(base))
         span = self._span_from_meta(meta)
         pos_args, named_args = self._call_args_from_children(args[1:], span)
-        return syntax.Call(
+        body = syntax.Call(
             callee=callee,
             args=pos_args,
             named_args=named_args,
@@ -1434,28 +1452,30 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             type_args=type_args,
         )
+        return _continue_postfix(base, body)
 
-    def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
-        """postfix DOT name — record field access."""
-        obj_expr = cast(syntax.Expr, args[0])
+    def field_access(self, meta: Meta, args: _Args) -> _PostfixExpr:
+        """Append member selection to a postfix chain."""
+        base = cast(_PostfixExpr, args[0])
         field_tok = _find_name_token(args)
-        return syntax.FieldAccess(
-            obj=obj_expr,
+        body = syntax.FieldAccess(
+            obj=_postfix_body(base),
             field=str(field_tok),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+        return _continue_postfix(base, body)
 
-    def index_access(self, meta: Meta, args: _Args) -> syntax.IndexAccess:
-        """postfix INDEX_LSQB expr RSQB — array/dict index access."""
-        exprs = [a for a in args if _is_expr_node(a)]
-        obj_expr, index_expr = exprs
-        return syntax.IndexAccess(
-            obj=cast(syntax.Expr, obj_expr),
-            index=cast(syntax.Expr, index_expr),
+    def index_access(self, meta: Meta, args: _Args) -> _PostfixExpr:
+        """Append array/dict indexing to a postfix chain."""
+        base = cast(_PostfixExpr, args[0])
+        body = syntax.IndexAccess(
+            obj=_postfix_body(base),
+            index=cast(syntax.Expr, args[2]),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+        return _continue_postfix(base, body)
 
     # ------------------------------------------------------------------
     # Juxtaposition (single-arg sugar)
@@ -1466,7 +1486,7 @@ class AstBuilder(Transformer):
 
         The ``postfix juxt_arg`` alternative is aliased to :meth:`juxt_call`.
         """
-        return cast(syntax.Expr, args[0])
+        return self._finish_postfix(cast(_PostfixExpr, args[0]))
 
     def juxt_call(self, meta: Meta, args: _Args) -> syntax.Call:
         """Single-arg call sugar: ``juxt: postfix juxt_arg -> juxt_call``.
@@ -1483,7 +1503,7 @@ class AstBuilder(Transformer):
         """
         # args[0] is the callee (postfix result); args[1] is the juxtaposed
         # expression (a juxt_arg Expr).
-        callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
+        callee, type_args = _split_type_apply(self._finish_postfix(cast(_PostfixExpr, args[0])))
         arg_expr = cast(syntax.Expr, args[1])
         return syntax.Call(
             callee=callee,
@@ -1611,15 +1631,16 @@ class AstBuilder(Transformer):
             self._next_id(),
         )
 
-    def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
-        """Apply explicit type arguments to a value without calling it."""
-        expr = cast(syntax.Expr, args[0])
-        return syntax.TypeApply(
-            expr=expr,
+    def type_apply(self, meta: Meta, args: _Args) -> _PostfixExpr:
+        """Append explicit type arguments to a postfix chain."""
+        base = cast(_PostfixExpr, args[0])
+        body = syntax.TypeApply(
+            expr=_postfix_body(base),
             type_args=_find_type_args(args),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+        return _continue_postfix(base, body)
 
     def _finalize_call_args(
         self,
@@ -3075,21 +3096,17 @@ def _find_type_expr(args: _Args) -> TypeExpr:
 
 
 def _find_type_args(args: _Args) -> tuple[TypeExpr, ...]:
-    """Return the explicit type-argument group among *args*, or ``()`` when absent.
-
-    A ``type_arg_list`` result is the sole nonempty tuple of TypeExprs the
-    grammar produces, so every rule with an optional ``::[...]`` group — applied
-    types, typed calls, and ``type_apply`` — locates it the same way here
-    rather than re-spelling the predicate inline.
-    """
-    for a in args:
-        if (
-            isinstance(a, tuple)
-            and len(a) > 0
-            and all(isinstance(item, _ALL_TYPE_EXPRS) for item in a)
-        ):
-            return cast(tuple[TypeExpr, ...], a)
-    return ()
+    """Return the required nonempty type-argument group among *args*."""
+    return cast(
+        tuple[TypeExpr, ...],
+        next(
+            arg
+            for arg in args
+            if isinstance(arg, tuple)
+            and len(arg) > 0
+            and all(isinstance(item, _ALL_TYPE_EXPRS) for item in arg)
+        ),
+    )
 
 
 def _find_name_token(args: _Args) -> Token:

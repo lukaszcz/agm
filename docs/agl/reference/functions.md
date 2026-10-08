@@ -486,20 +486,57 @@ that has captured its receiver and has parameters only for the remaining
 method parameters. It can be stored, passed to another function, or partially
 applied like any other function value.
 
-A **leading-dot method invocation** omits the receiver and produces a unary
-function that accepts it:
+A **leading-dot expression** omits the receiver of a member expression and
+produces a unary function that accepts it:
 
 ```ebnf
-leading_dot_expr ::= "." field_name value_type_args? "(" arg_list? ")"
+leading_dot_expr ::= "." field_name postfix_suffix*
+postfix_suffix  ::= "." field_name | "[" expr "]"
+                  | "(" arg_list? ")" | value_type_args
 ```
 
-`.map(f)` is equivalent to `fn(self: ContextType) => self.map(f)`, except that
-`ContextType` is inferred rather than written. The surrounding expression must
-provide a concrete unary function type; otherwise the receiver type cannot be
-inferred and the expression is rejected. Method selection still uses that
-receiver's static type, with the same visibility and ambiguity rules as an
-ordinary member call. Explicit method type arguments and named arguments are
-supported.
+`.field` behaves like `fn(receiver: T) => receiver.field`, and `.method(args)`
+like `fn(receiver: T) => receiver.method(args)`. The surrounding expression must
+supply a unary function type with a resolved receiver type `T`; the result type
+may be inferred. Pipelines, annotated bindings, and callback parameter types
+can supply this context. An unconstrained `let read = .field` is rejected.
+
+Selection and invocation follow ordinary member rules. A field yields its
+value; a method selected without parentheses yields a bound function. Thus,
+for `Meter::add(self, amount: int) -> int`, `.add` has type
+`Meter -> int -> int`, while `.add(3)` has type `Meter -> int`. A field holding
+a function can likewise be selected or called. Explicit method type arguments,
+named arguments, and partial-application placeholders are supported.
+
+The complete postfix chain belongs to the function body: `.owner.name`,
+`.copy().value`, and `.items[0]` select or call through the omitted receiver.
+Parentheses end that chain; `(meter |> .add)(3)` first selects a bound method,
+then calls it. Each nested leading-dot expression introduces its own receiver.
+Names in arguments refer to their enclosing bindings, including a method's
+`self`.
+
+The receiver's static type determines member selection, visibility, and
+ambiguity. An enum receiver has no fields; narrow it to a member record before
+projecting a field.
+
+```agl
+enum VerifyResult
+  | Complete(reason: text)
+  | Incomplete(reason: text)
+
+record Meter
+  value: int
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+program def main() -> unit =
+  let result: VerifyResult = Incomplete("pending")
+  let reason = result as VerifyResult::Incomplete |> .reason
+  let select-add: Meter -> int -> int = .add
+  let add = select-add(Meter(4))
+  print(reason)
+  print(add(3))
+```
 
 ```agl
 program def main() -> unit =

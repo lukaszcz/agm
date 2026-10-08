@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "enum_field_projection_and_generic_callbacks",
+      "params": {"mode": "fields"},
+      "expect": {
+        "stdout": "unfinished\npending\n[\"a\", \"b\"]\ngeneric\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "bound_methods_callable_fields_postfix_chains_and_capture",
+      "params": {"mode": "methods"},
+      "expect": {
+        "stdout": "7\n4\n4\ntyped\n[\"reference\", \"reference\"]\n6\n4\n14\n9\n",
+        "calls": {}
+      }
+    }
+  ]
+}

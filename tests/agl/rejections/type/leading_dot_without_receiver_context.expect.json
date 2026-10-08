@@ -1,6 +1,6 @@
 {
   "diagnostic": {
     "line": 2,
-    "message_contains": ["self", "context"]
+    "message_contains": ["receiver", "context"]
   }
 }

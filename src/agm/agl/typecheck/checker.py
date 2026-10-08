@@ -4305,7 +4305,7 @@ class _Checker:
         omitted = tuple(index for index, param in enumerate(node.params) if param.type_expr is None)
         if expected is not None and (node.implicit_self or omitted):
             expected = self._active_inference_engine().zonk(expected)
-        # A leading-dot invocation is represented as a unary lambda whose
+        # A leading-dot expression is represented as a unary lambda whose
         # generated receiver has no source annotation. Its concrete type must
         # already be available from the surrounding function context.
         if node.implicit_self and (
@@ -4314,7 +4314,7 @@ class _Checker:
             or contains_inference_var(expected.params[0])
         ):
             raise AglTypeError(
-                "Cannot infer type of 'self' for leading-dot method invocation; "
+                "Cannot infer the receiver type for a leading-dot expression; "
                 "a concrete unary function context is required.",
                 span=node.span,
             )

@@ -6474,7 +6474,32 @@ class TestOperatorValues:
 # ---------------------------------------------------------------------------
 
 
-class TestLeadingDotMethodInvocation:
+class TestLeadingDotExpressions:
+    def test_field_projection_uses_the_contextual_receiver(self) -> None:
+        checked = accept_type(
+            "enum VerifyResult\n"
+            "  | Complete(reason: text)\n"
+            "  | Incomplete(reason: text)\n"
+            "let read: VerifyResult::Incomplete -> text = .reason\n"
+            'read(Incomplete("pending"))'
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            ".reason",
+            "let bad: (int, int) -> int = .reason",
+            "def retain[A, B](callback: A -> B) -> unit = ()\nretain(.reason)",
+            "enum Result\n  | Item(reason: text)\nlet bad: Result -> text = .reason",
+            "record Item\n  reason: text\nlet bad: Item -> text = .reason()",
+        ),
+        ids=("absent", "non-unary", "unresolved", "enum-receiver", "non-callable-field"),
+    )
+    def test_field_projection_preserves_context_and_member_rules(self, source: str) -> None:
+        reject_type(source)
+
     def test_receiver_type_comes_from_annotated_function_context(self) -> None:
         checked = accept_type(
             "let transform: (array[int]) -> array[text] = "
@@ -6500,7 +6525,7 @@ class TestLeadingDotMethodInvocation:
     )
     def test_receiver_requires_concrete_unary_function_context(self, source: str) -> None:
         error = reject_type(source)
-        assert "self" in str(error).lower() and "context" in str(error).lower()
+        assert "receiver" in str(error).lower() and "context" in str(error).lower()
 
 
 # ---------------------------------------------------------------------------

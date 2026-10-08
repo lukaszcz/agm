@@ -25,6 +25,19 @@ from agm.agl.semantics.values import DecimalValue, IntValue, TextValue
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_inline_ir, nominal_id_for
 
 
+def test_leading_dot_receiver_preserves_enclosing_self() -> None:
+    source = """
+record Meter
+  value: int
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+def Meter::offset(self, target: Meter) -> int = target |> .add(self.value)
+
+let result = Meter(4).offset(Meter(10))
+"""
+    assert evaluate_ir(source)["result"] == IntValue(14)
+
+
 def test_top_level_call_can_reference_later_function() -> None:
     source = """
 let answer = first(20)

@@ -543,12 +543,12 @@ class FuncDef(GenericDeclaration):
 
 @dataclass(frozen=True, slots=True)
 class Lambda:
-    """An anonymous function expression or desugared leading-dot invocation.
+    """An anonymous function expression or desugared leading-dot expression.
 
     ``return_type`` is ``None`` when omitted (inferred from the body). Parameter
     annotations may be omitted when a matching function context supplies their
-    types. ``implicit_self`` marks the parser-generated unary lambda for
-    ``.method(args)``, whose receiver type comes from its function context.
+    types. ``implicit_self`` marks a parser-generated unary lambda for a
+    leading-dot postfix chain, whose receiver type comes from function context.
     """
 
     params: tuple[Param, ...]

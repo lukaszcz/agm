@@ -16,7 +16,8 @@ def test_command_subpackages_match_cli_command_groups() -> None:
     subpackages = {
         path.name
         for path in commands_dir.iterdir()
-        if path.is_dir() and not path.name.startswith("__")
+        # Deleted packages can leave directories containing only bytecode caches.
+        if path.is_dir() and (path / "__init__.py").is_file()
     }
 
     assert subpackages == {"config", "dep", "pkg", "sync", "tmux", "workspace", "worktree"}

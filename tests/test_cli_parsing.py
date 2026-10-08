@@ -338,17 +338,22 @@ class TestWorktreeNew:
         assert calls[0].branch == "feat/z"
 
     @pytest.mark.parametrize("command", [["worktree", "new"], ["wt", "new"]])
-    def test_wt_new_no_fetch(
+    @pytest.mark.parametrize(
+        "flags, no_fetch", [([], True), (["--no-fetch"], True), (["--fetch"], False)]
+    )
+    def test_wt_new_fetch_policy(
         self,
         runner: CliRunner,
         monkeypatch: pytest.MonkeyPatch,
         command: list[str],
+        flags: list[str],
+        no_fetch: bool,
     ) -> None:
         calls = make_recorder(monkeypatch, worktree_new_command)
-        result = invoke(runner, [*command, "--no-fetch", "feat/z"])
+        result = invoke(runner, [*command, *flags, "feat/z"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].no_fetch is True
+        assert calls[0].no_fetch is no_fetch
 
     def test_wt_new_missing_branch(self, runner: CliRunner) -> None:
         result = invoke(runner, ["wt", "new"])
@@ -563,12 +568,21 @@ class TestDep:
         assert len(calls) == 1
         assert calls[0].create_branch is True
 
-    def test_dep_switch_no_fetch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize(
+        "flags, no_fetch", [([], True), (["--no-fetch"], True), (["--fetch"], False)]
+    )
+    def test_dep_switch_fetch_policy(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        flags: list[str],
+        no_fetch: bool,
+    ) -> None:
         calls = make_recorder(monkeypatch, dep_switch_command)
-        result = invoke(runner, ["dep", "switch", "--no-fetch", "mylib", "feat/x"])
+        result = invoke(runner, ["dep", "switch", *flags, "mylib", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].no_fetch is True
+        assert calls[0].no_fetch is no_fetch
 
     def test_dep_rm(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, dep_remove_command)
@@ -791,17 +805,22 @@ class TestOpen:
         assert calls[0].branch == "feat/x"
 
     @pytest.mark.parametrize("command", [["open"], ["workspace", "open"], ["wsp", "open"]])
-    def test_open_no_fetch(
+    @pytest.mark.parametrize(
+        "flags, no_fetch", [([], True), (["--no-fetch"], True), (["--fetch"], False)]
+    )
+    def test_open_fetch_policy(
         self,
         runner: CliRunner,
         monkeypatch: pytest.MonkeyPatch,
         command: list[str],
+        flags: list[str],
+        no_fetch: bool,
     ) -> None:
         calls = make_recorder(monkeypatch, workspace_open_command)
-        result = invoke(runner, [*command, "--no-fetch", "feat/x"])
+        result = invoke(runner, [*command, *flags, "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].no_fetch is True
+        assert calls[0].no_fetch is no_fetch
 
     def test_open_with_pane_count(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, workspace_open_command)

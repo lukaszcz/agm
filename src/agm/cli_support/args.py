@@ -76,7 +76,7 @@ class ConfigUpdateArgs:
 class WorktreeNewArgs:
     worktrees_dir: str | None
     branch: str
-    no_fetch: bool = False
+    no_fetch: bool = True
 
 
 @dataclass(slots=True)
@@ -102,7 +102,7 @@ class DepSwitchArgs:
     dep: str
     branch: str
     create_branch: bool
-    no_fetch: bool = False
+    no_fetch: bool = True
 
 
 @dataclass(slots=True)
@@ -111,7 +111,7 @@ class OpenArgs:
     pane_count: str | None
     parent: str | None
     branch: str
-    no_fetch: bool = False
+    no_fetch: bool = True
 
 
 @dataclass(slots=True)

@@ -177,7 +177,7 @@ def _prepare_workspace(
     parent: str | None,
     branch: str,
     create_branch: bool,
-    no_fetch: bool = False,
+    no_fetch: bool = True,
     cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
@@ -223,7 +223,7 @@ def create_workspace(
     pane_count: str | None,
     parent: str | None,
     branch: str,
-    no_fetch: bool = False,
+    no_fetch: bool = True,
     cwd: Path | None = None,
 ) -> None:
     _prepare_workspace(
@@ -243,7 +243,7 @@ def checkout_workspace(
     pane_count: str | None,
     parent: str | None,
     branch: str,
-    no_fetch: bool = False,
+    no_fetch: bool = True,
     cwd: Path | None = None,
 ) -> None:
     _prepare_workspace(
@@ -263,7 +263,7 @@ def open_or_create_workspace(
     pane_count: str | None,
     parent: str | None,
     branch: str,
-    no_fetch: bool = False,
+    no_fetch: bool = True,
     cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()

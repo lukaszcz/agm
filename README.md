@@ -180,10 +180,11 @@ agm open main
 agm open --num-panes 4 feat/login
 agm open --parent develop feat/search
 agm open --detach feat/search
-agm open --no-fetch feat/search
+agm open --fetch feat/search
 ```
 
-`--no-fetch` skips Git fetches and resolves remote branches from locally available refs.
+Opening uses locally available Git refs without fetching by default. Use `--fetch` to refresh
+remote refs first; `--no-fetch` explicitly keeps the default.
 
 ### `agm close`
 
@@ -391,7 +392,8 @@ agm config update
 
 ### `agm dep`
 
-Manage dependency checkouts under the project dependency directory.
+Manage dependency checkouts under the project dependency directory. Switching uses local Git
+refs by default; `--fetch` refreshes remote refs first.
 
 ```bash
 agm dep list
@@ -399,18 +401,19 @@ agm dep new https://github.com/org/lib.git
 agm dep new --branch develop https://github.com/org/lib.git
 agm dep switch mylib feat/update
 agm dep switch --branch mylib feat/new-work
-agm dep switch --no-fetch mylib feat/update
+agm dep switch --fetch mylib feat/update
 agm dep rm mylib/feat/update
 agm dep rm --all mylib
 ```
 
 ### `agm worktree`
 
-Low-level worktree operations for the main project repo.
+Low-level worktree operations for the main project repo. Creation uses local Git refs by
+default; `--fetch` refreshes remote refs first.
 
 ```bash
 agm worktree new feat/search
-agm worktree new --no-fetch feat/search
+agm worktree new --fetch feat/search
 agm wt new --dir /tmp/worktrees feat/search
 agm worktree remove --force old-branch
 agm wt rm old-branch

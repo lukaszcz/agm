@@ -163,6 +163,14 @@ def _dry_run_option() -> bool:
     )
 
 
+def _no_fetch_option() -> bool:
+    return typer.Option(
+        True,
+        "--no-fetch/--fetch",
+        help="Use local Git refs (default); --fetch refreshes remote refs first.",
+    )
+
+
 def _strict_json_option() -> bool | None:
     option = execution_option_spec("strict_json")
     return typer.Option(
@@ -448,7 +456,7 @@ def open(
         help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
-    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
+    no_fetch: bool = _no_fetch_option(),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -616,7 +624,7 @@ def workspace_open(
         help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
-    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
+    no_fetch: bool = _no_fetch_option(),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -743,7 +751,7 @@ def new(
         help="Create the worktree under DIR.",
         autocompletion=completion.complete_path_argument,
     ),
-    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
+    no_fetch: bool = _no_fetch_option(),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1133,7 +1141,7 @@ def dep_switch(
         "--branch",
         help="Create DEP's BRANCH from the dependency's default branch before adding it.",
     ),
-    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
+    no_fetch: bool = _no_fetch_option(),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:

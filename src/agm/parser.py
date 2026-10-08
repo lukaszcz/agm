@@ -26,7 +26,7 @@ _NO_STDLIB_ROW = "  --no-stdlib            Disable the automatic `import std/pre
 
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
-        agm open [-d] [-n PANES] [-p PARENT] [--no-fetch] [--dry-run] TARGET
+        agm open [-d] [-n PANES] [-p PARENT] [--fetch | --no-fetch] [--dry-run] TARGET
 
         Open a workspace's tmux session, creating or checking out TARGET's branch
         as needed. Also: agm workspace open, agm wsp open.
@@ -36,7 +36,8 @@ _HELP_TEXTS: dict[str, str] = {
           -n, --num-panes PANES  Create the session with PANES panes.
           -p, --parent PARENT    Base a new branch on PARENT instead of the main
                                  workspace's branch.
-          --no-fetch             Resolve remote branches from local refs.
+          --fetch               Fetch Git remotes before resolving branches.
+          --no-fetch            Resolve remote branches from local refs (default).
 
         TARGET:
           repo              The main workspace.
@@ -396,7 +397,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         config directory.
     """),
     ("worktree", "new"): textwrap.dedent("""\
-        agm worktree new [-d DIR] [--no-fetch] [--dry-run] BRANCH
+        agm worktree new [-d DIR] [--fetch | --no-fetch] [--dry-run] BRANCH
 
         Create a worktree for BRANCH, creating the branch or checking out an
         existing one.
@@ -404,7 +405,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Options:
           -d, --dir DIR  Create it under DIR instead of the project's worktrees
                          directory.
-          --no-fetch     Resolve remote branches from local refs.
+          --fetch       Fetch Git remotes before resolving branches.
+          --no-fetch    Resolve remote branches from local refs (default).
     """),
     ("worktree", "remove"): textwrap.dedent("""\
         agm worktree remove [-f] [--dry-run] BRANCH
@@ -432,7 +434,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
           -b, --branch BRANCH  Clone BRANCH instead of the default branch.
     """),
     ("dep", "switch"): textwrap.dedent("""\
-        agm dep switch [-b] [--no-fetch] [--dry-run] DEP BRANCH
+        agm dep switch [-b] [--fetch | --no-fetch] [--dry-run] DEP BRANCH
 
         Use DEP's checkout named BRANCH (directory name or checked-out branch),
         adding a worktree at deps/DEP/BRANCH for an existing branch if none
@@ -440,7 +442,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Options:
           -b, --branch  Create BRANCH from DEP's default branch first.
-          --no-fetch    Resolve remote branches from local refs.
+          --fetch      Fetch Git remotes before resolving branches.
+          --no-fetch   Resolve remote branches from local refs (default).
     """),
     ("dep", "rm"): textwrap.dedent("""\
         agm dep rm [--dry-run] DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT

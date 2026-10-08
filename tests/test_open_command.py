@@ -588,13 +588,19 @@ class TestCheckoutSession:
 
 
 class TestSmartOpenSession:
-    def test_no_fetch_skips_fetch_for_branch_creation(
+    @pytest.mark.parametrize("workflow", ["open", "create", "checkout"])
+    @pytest.mark.parametrize("fetch_options", [{}, {"no_fetch": True}, {"no_fetch": False}])
+    def test_workspace_preparation_fetch_policy(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         env: dict[str, str],
+        workflow: str,
+        fetch_options: dict[str, bool],
     ) -> None:
         project = _make_git_project(tmp_path, env)
+        if workflow == "checkout":
+            git_run(project / "repo", ["branch", "new-branch"], env)
         fetches: list[Path] = []
 
         def record_fetch(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
@@ -607,16 +613,21 @@ class TestSmartOpenSession:
         monkeypatch.setattr(open_module.git_helpers, "fetch", record_fetch)
         monkeypatch.setattr(open_module, "create_configured_workspace_session", skip_session)
 
-        open_or_create_workspace(
+        prepare = {
+            "open": open_or_create_workspace,
+            "create": create_workspace,
+            "checkout": checkout_workspace,
+        }[workflow]
+        prepare(
             detached=True,
             pane_count=None,
             parent=None,
             branch="new-branch",
-            no_fetch=True,
             cwd=project,
+            **fetch_options,
         )
 
-        assert fetches == []
+        assert bool(fetches) is (not fetch_options.get("no_fetch", True))
         assert (project / "worktrees" / "new-branch" / ".git").exists()
 
     def test_opens_main_session_when_main_branch(
@@ -918,7 +929,9 @@ class TestOpenWorkspaceRunningSession:
         monkeypatch.setattr(process, "run_foreground", failing_fetch)
 
         result = CliRunner().invoke(
-            get_command(cli.app), ["workspace", "open", "--detach", branch], prog_name="agm"
+            get_command(cli.app),
+            ["workspace", "open", "--fetch", "--detach", branch],
+            prog_name="agm",
         )
 
         assert result.exit_code == 1

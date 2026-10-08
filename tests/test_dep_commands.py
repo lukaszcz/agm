@@ -655,8 +655,9 @@ class TestDepSwitchRun:
         assert worktree_add_calls[0]["path"] == dep_dir / "feature"
         assert config_updates[0]["dep_branch"] == "feature"
 
+    @pytest.mark.parametrize("no_fetch", [True, False])
     def test_creates_new_branch_from_default(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_fetch: bool
     ) -> None:
         project_dir, dep_dir, repo_path = self._setup_dep(tmp_path)
 
@@ -679,10 +680,10 @@ class TestDepSwitchRun:
         monkeypatch.setattr(dep_switch.git_helpers, "worktree_add", fake_worktree_add)
         monkeypatch.setattr(dep_switch, "update_dependency_config", lambda **_kw: None)
 
-        args = DepSwitchArgs(dep="mylib", branch="new-feat", create_branch=True)
+        args = DepSwitchArgs(dep="mylib", branch="new-feat", create_branch=True, no_fetch=no_fetch)
         dep_switch.run(args)
 
-        assert fetched == [repo_path]
+        assert fetched == ([] if no_fetch else [repo_path])
         assert len(worktree_add_calls) == 1
         call = worktree_add_calls[0]
         assert call["branch"] == "new-feat"

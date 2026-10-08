@@ -18,6 +18,8 @@ Dependencies are sibling repositories under the project's deps directory, manage
 
 ## Sync
 
+Workspace opening, worktree creation, and dependency switching resolve branches from local Git refs by default; `--fetch` opts into refreshing remote refs first.
+
 `sync fetch` prunes stale worktree registrations, fetches the main repo and checked-out dependencies, and creates missing tracking branches. `sync pull` runs that fetch and then merges every dependency, the main workspace, and each branch workspace from its configured upstream.
 
 ## Workspace Environment and Shell

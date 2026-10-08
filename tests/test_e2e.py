@@ -1426,12 +1426,20 @@ class TestConfigUpdate:
 
 
 class TestNoFetch:
-    """Offline branch resolution uses cached Git refs, not newer remote commits."""
+    """Checkout commands use cached refs unless fetching is explicitly requested."""
 
     @pytest.mark.parametrize("workflow", ["open", "worktree", "dependency"])
     @pytest.mark.parametrize("create_branch", [False, True], ids=["cached-branch", "new-branch"])
-    def test_no_fetch_preserves_cached_refs_until_sync(
-        self, tmp_path: Path, env: dict[str, str], workflow: str, create_branch: bool
+    @pytest.mark.parametrize(
+        "flags", [[], ["--no-fetch"], ["--fetch"]], ids=["default", "offline", "fetch"]
+    )
+    def test_fetch_policy_and_explicit_sync(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        workflow: str,
+        create_branch: bool,
+        flags: list[str],
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         publisher = make_working_repo(tmp_path / "publisher", bare, env)
@@ -1461,14 +1469,14 @@ class TestNoFetch:
 
         branch = "feat/local" if create_branch else "feat/cached"
         if workflow == "dependency":
-            command = ["dep", "switch", "--no-fetch"]
+            command = ["dep", "switch", *flags]
             if create_branch:
                 command.append("-b")
             command.extend(["mylib", branch])
             checkout = project / "deps" / "mylib" / branch
         else:
             command = ["open"] if workflow == "open" else ["worktree", "new"]
-            command.extend(["--no-fetch", branch])
+            command.extend([*flags, branch])
             checkout = project / "worktrees" / branch
             if workflow == "open":
                 _install_fake_tmux(tmp_path / "bin", tmp_path / "tmux.log", env)
@@ -1477,10 +1485,13 @@ class TestNoFetch:
 
         assert checkout.is_dir()
         assert _git("branch", "--show-current", cwd=checkout, env=env).stdout.strip() == branch
-        expected = main if create_branch else cached
+        remote_ref = advanced if "--fetch" in flags else cached
+        expected = main if create_branch else remote_ref
         assert _git("rev-parse", "HEAD", cwd=checkout, env=env).stdout.strip() == expected
-        assert _git("rev-parse", "origin/feat/cached", cwd=repo, env=env).stdout.strip() == cached
-        assert not (checkout / "remote-only.txt").exists()
+        assert (
+            _git("rev-parse", "origin/feat/cached", cwd=repo, env=env).stdout.strip() == remote_ref
+        )
+        assert (checkout / "remote-only.txt").exists() is (not create_branch and "--fetch" in flags)
         if not create_branch:
             assert (checkout / "cached.txt").read_text() == "cached.txt"
             assert (
@@ -4979,7 +4990,7 @@ class TestOpen:
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
         _push_branch(clone, bare, "feat/x", "x.txt", env)
 
-        result = run_agm(["open", "feat/x"], env=env, cwd=str(project))
+        result = run_agm(["open", "--fetch", "feat/x"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert "new-session" in log
@@ -7821,7 +7832,7 @@ class TestDepListCommand:
         dep_clone = tmp_path / "dep-clone"
         _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
         _push_branch(dep_clone, bare_dep, "feat/api", "api.txt", env)
-        run_agm(["dep", "switch", "lib", "feat/api"], env=env, cwd=str(project / "repo"))
+        run_agm(["dep", "switch", "--fetch", "lib", "feat/api"], env=env, cwd=str(project / "repo"))
 
         result = run_agm(["dep", "list", "--all"], env=env, cwd=str(project / "repo"))
 
